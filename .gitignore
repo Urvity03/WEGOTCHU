@@ -1,0 +1,166 @@
+# ==============================================================================
+# WEGOTCHU .gitignore
+# Comprehensive security, privacy, and development hygiene rules
+# ==============================================================================
+
+# --- Python & Bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# --- Jupyter / IPython Notebooks ---
+.ipynb_checkpoints
+*-checkpoint.ipynb
+*.nbconvert.ipynb
+
+# --- Environment Variables & Sensitive Credentials (STRICT) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+secrets/
+credentials.json
+service_account.json
+firebase_credentials.json
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+
+# --- OS-generated Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Model Checkpoints & Weights ---
+*.pt
+*.pth
+*.bin
+*.onnx
+*.tflite
+*.safetensors
+*.ckpt
+checkpoints/
+models/weights/
+models/pretrained/
+models/exported/
+
+# --- Datasets & Telemetry (STRICT: Never commit raw or sensitive recordings) ---
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/features/*
+!data/features/.gitkeep
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.zip
+*.7z
+
+# --- Media & Acoustic/Visual Recordings ---
+*.wav
+*.mp3
+*.aac
+*.flac
+*.m4a
+*.ogg
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+recordings/
+audio_samples/
+video_samples/
+
+# --- Mobile (Android) ---
+.gradle/
+local.properties
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+*/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+
+# --- Backend & Database ---
+*.sqlite3
+*.db
+backend/db.sqlite3
+instance/
+
+# --- Logs, Profiling, and Temp ---
+*.log
+logs/
+temp/
+tmp/
+*.prof
+*.lprof
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Frontend / Web Tooling (if added) ---
+node_modules/
+.npm/
