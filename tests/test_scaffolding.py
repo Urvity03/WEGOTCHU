@@ -1,9 +1,9 @@
-﻿import json
+import json
 import re
 import pathlib
-import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
 
 def test_critical_directories_exist():
     expected_dirs = [
@@ -35,6 +35,7 @@ def test_critical_directories_exist():
     for rel_dir in expected_dirs:
         dir_path = REPO_ROOT / rel_dir
         assert dir_path.is_dir(), f"Expected directory missing: {rel_dir}"
+
 
 def test_critical_files_exist():
     expected_files = [
@@ -72,7 +73,10 @@ def test_critical_files_exist():
     for rel_file in expected_files:
         file_path = REPO_ROOT / rel_file
         assert file_path.is_file(), f"Expected file missing: {rel_file}"
-        assert file_path.stat().st_size > 50, f"File appears too small or empty: {rel_file}"
+        assert (
+            file_path.stat().st_size > 50
+        ), f"File appears too small or empty: {rel_file}"
+
 
 def test_gitignore_covers_security_and_data():
     gitignore_path = REPO_ROOT / ".gitignore"
@@ -83,12 +87,15 @@ def test_gitignore_covers_security_and_data():
     assert "*.onnx" in content
     assert "__pycache__/" in content
 
+
 def test_data_flow_json_blocks():
     data_flow_path = REPO_ROOT / "docs/architecture/data-flow.md"
     content = data_flow_path.read_text(encoding="utf-8")
     # Extract json code blocks
     json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
-    assert len(json_blocks) >= 4, "Expected at least 4 JSON contract examples in data-flow.md"
+    assert (
+        len(json_blocks) >= 4
+    ), "Expected at least 4 JSON contract examples in data-flow.md"
     for block in json_blocks:
         parsed = json.loads(block)
         assert isinstance(parsed, dict)
