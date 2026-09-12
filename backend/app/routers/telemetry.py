@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 
-from app.models.telemetry import TelemetryPayload
-
+from ..models.telemetry import TelemetryPayload
 router = APIRouter(prefix="/api/v1", tags=["telemetry"])
 
 
