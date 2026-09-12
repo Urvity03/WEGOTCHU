@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from .routers.telemetry import router as telemetry_router
+
 app = FastAPI(
     title="WEGOTCHU Backend",
     version="0.1.0",
