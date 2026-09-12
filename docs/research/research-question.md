@@ -1,75 +1,99 @@
-# WEGOTCHU: Research Formulation & Experimental Design
+# WEGOTCHU: Research Formulation
 
-## 1. Primary Research Question
+## 1. Main Research Question
 
-> **"Can personalized temporal multimodal AI improve proactive personal safety-risk estimation compared with isolated or non-personalized models?"**
+> **"Can personalized and time-aware AI improve the detection of unusual situations in a person's everyday movement compared with approaches that do not consider their individual behavior?"**
 
----
+The broader goal of WEGOTCHU is to explore whether AI can recognize meaningful changes in a person's usual patterns early enough to support a proactive safety check-in.
 
-## 2. Supporting Research Questions
-
-To systematically decompose the primary inquiry, the research addresses six supporting scientific questions:
-
-1. **SRQ 1 (Temporal Context):**  
-   *Does incorporating temporal sequence context (e.g., GRU/TCN over multi-minute windows) significantly reduce transient false positives compared to instantaneous static ML evaluations?*
-2. **SRQ 2 (Personalization):**  
-   *Does conditioning anomaly detection on learned individual behavioral baselines (e.g., commute routes, baseline walking pace) achieve a statistically significant decrease in false-positive rates (FPR) without compromising recall?*
-3. **SRQ 3 (Multimodal Robustness):**  
-   *Does cross-modal fusion (motion kinematics + geospatial corridor adherence + acoustic distress) provide resilience against single-modality sensor noise or spoofing?*
-4. **SRQ 4 (Fusion Architecture):**  
-   *Which multimodal fusion paradigm (Early Feature Fusion, Late Decision Fusion, or Hybrid Cross-Attention Fusion) achieves the optimal trade-off between calibrated risk classification and computational complexity?*
-5. **SRQ 5 (Edge Feasibility & Latency):**  
-   *Can the proposed temporal anomaly models be quantized (INT8 via ONNX / LiteRT) to execute on mobile edge hardware with $< 100$ ms inference latency and $< 2\%$ battery consumption per hour of active Safety Mode?*
-6. **SRQ 6 (Privacy vs. Utility Trade-offs):**  
-   *What is the quantitative degradation in risk estimation accuracy when raw acoustic and visual data are strictly restricted to ephemeral on-device ring buffers versus centralized cloud embeddings?*
+The system should not assume that an unusual action means that a person is in danger. Instead, it should identify changes that are unusual for that particular person and use them as one signal in a broader safety assessment.
 
 ---
 
-## 3. Planned Experimental Hierarchy
+## 2. Initial AI/ML Problem: Personalized Route-Deviation Detection
 
-The project establishes an eight-tier experimental ladder to isolate performance gains:
+The first stage of the project focuses on **personalized route-deviation detection**.
 
+The initial model will estimate how unusual a person's current route is compared with their previous travel patterns.
+
+### Input Telemetry
+The initial system will work primarily with:
+* **Location** (Latitude, Longitude, Altitude)
+* **Timestamp** (ISO-8601 UTC timestamp)
+* **Speed** (Instantaneous velocity over ground, m/s)
+* **Heading** (Bearing degrees $[0, 360)$)
+* **GPS Accuracy** (Horizontal accuracy radius in meters)
+* **Trip Information** (Trip ID, origin hint, start time, active duration)
+
+*Additional features (e.g., perpendicular corridor distance, heading variance, velocity delta, spatial envelope boundaries) can be derived from these signals during preprocessing.*
+
+### Output Specification
+The model will produce a continuous **route-anomaly score** $[0.0, 1.0]$ representing how different the current trip is from the person's historical travel behavior.
+
+> [!IMPORTANT]
+> The anomaly score is **not a direct measure of danger**.  
+> For example, taking a completely new route may be unusual while still being perfectly safe.
+
+---
+
+## 3. Supporting Questions
+
+The project will gradually investigate the following scientific and engineering questions:
+
+1. **Route Deviation:**  
+   *Can a system identify when a person's current route differs substantially from their usual routes?*
+2. **Personalization:**  
+   *Does learning an individual's normal travel behavior reduce unnecessary alerts compared with using the same model for everyone?*
+3. **Temporal Context:**  
+   *Does considering how behavior changes over time improve detection compared with evaluating individual observations independently?*
+4. **Multimodal Information:**  
+   *Can combining location, movement, audio, and other available signals provide a more reliable picture than relying on a single signal?*
+5. **Practical Deployment:**  
+   *Can the resulting models operate efficiently enough for a real-time mobile safety application?*
+
+---
+
+## 4. Research Approach: Incremental Progression
+
+The project will develop the system incrementally rather than starting with a complex model:
+
+```text
+Simple route-deviation baseline
+            ↓
+Classical anomaly detection
+            ↓
+Personalized behavioral model
+            ↓
+Temporal modeling
+            ↓
+Multimodal risk estimation
+            ↓
+Safety Intelligence Engine
 ```
-[Experiment 1: Rule-Based Heuristic Baseline]
-                      ↓
-[Experiment 2: Traditional ML Baseline (Random Forest / SVM)]
-                      ↓
-[Experiment 3: Static ML (MLP on Independent Windows)]
-                      ↓
-[Experiment 4: Temporal ML (GRU / TCN Sequence Modeling)]
-                      ↓
-[Experiment 5: Generic Population Model]
-                      ↓
-[Experiment 6: Personalized Baseline Model (GMM / Online Adaptation)]
-                      ↓
-[Experiment 7: Single-Modal Baselines (IMU-only, Audio-only, GPS-only)]
-                      ↓
-[Experiment 8: Multimodal Cross-Modal Fusion Model]
-```
 
-### Experiment Descriptions
-1. **Exp 1 — Rule-Based Baseline:** Static thresholding (e.g., acceleration magnitude $> 3.5g$ or speed $> 15$ km/h on foot). Acts as the traditional safety app benchmark.
-2. **Exp 2 — Traditional ML Baseline:** Scikit-learn Random Forest and One-Class SVM applied to engineered statistical features over individual time windows.
-3. **Exp 3 — Static Deep Learning:** Multi-Layer Perceptron (MLP) or Feed-Forward Neural Network evaluating isolated windows without temporal awareness.
-4. **Exp 4 — Temporal Sequence ML:** Gated Recurrent Units (GRU) and Temporal Convolutional Networks (TCN) processing contiguous sequences of 30 to 120 seconds.
-5. **Exp 5 — Generic Population Model:** Model trained uniformly across all participants without individual calibration.
-6. **Exp 6 — Personalized Model:** Model augmented with individual baseline statistics (Mahalanobis distance to personal mean velocity, route corridor bounds).
-7. **Exp 7 — Single-Modal Isolation:** Evaluating performance when only IMU, only Audio, or only GPS telemetry is provided to quantify modality impact.
-8. **Exp 8 — Multimodal Fusion:** Full system integrating kinematic, acoustic, and geospatial streams with confidence weighting.
+Each stage will be evaluated against the previous stage to determine whether the additional complexity provides a meaningful improvement.
 
----
-
-## 4. Evaluation Metrics & Benchmarking Criteria
+### Evaluation Metrics & Benchmarking Criteria
 
 | Metric | Scientific Purpose | Target Optimization |
 | :--- | :--- | :--- |
-| **Precision** | Fraction of triggered interventions that represented genuine anomalies. | High (mitigate alert fatigue) |
-| **Recall (Sensitivity)** | Fraction of actual risk scenarios detected by the system. | Maximum Priority ($\ge 95\%$) |
-| **F1-Score / Macro-F1** | Harmonic mean of Precision and Recall across imbalanced classes. | Primary optimization metric |
-| **False Positive Rate (FPR)** | Rate at which normal behavior is incorrectly flagged as elevated risk. | Target $< 2\%$ in daily usage |
-| **False Negative Rate (FNR)** | Critical safety failure rate (missed elevated/emergency events). | Target $< 1\%$ |
-| **ROC-AUC & PR-AUC** | Area under ROC and Precision-Recall curves; PR-AUC is primary due to extreme class imbalance in safety anomalies. | Target PR-AUC $> 0.85$ |
-| **Expected Calibration Error (ECE)** | Measures how closely predicted probability reflects real-world empirical frequency. | Target ECE $< 0.05$ |
-| **Inference Latency** | Time required to process a 2.56-second window on an Android edge device. | Target $< 100$ ms |
-| **Memory Footprint** | RAM consumed by the running inference runtime. | Target $< 80$ MB |
-| **Battery Drain** | Energy consumption under continuous Safety Mode background monitoring. | Target $< 2.5\%$ battery / hour |
+| **Precision** | Fraction of flagged deviations that represent genuine statistical anomalies. | High (mitigate alert fatigue) |
+| **Recall (Sensitivity)** | Fraction of actual route anomalies successfully detected. | Priority ($\ge 95\%$) |
+| **F1-Score / Macro-F1** | Harmonic mean of Precision and Recall across imbalanced trajectories. | Primary evaluation metric |
+| **False Positive Rate (FPR)** | Rate at which routine movement is incorrectly flagged as unusual. | Target $< 2\%$ in daily usage |
+| **False Negative Rate (FNR)** | Missed deviation rate on anomalous trajectories. | Target $< 1\%$ |
+| **PR-AUC** | Area under Precision-Recall curve under heavy imbalance. | Target PR-AUC $> 0.85$ |
+| **Expected Calibration Error (ECE)** | Reliability of continuous anomaly and risk scores. | Target ECE $< 0.05$ |
+| **Inference Latency** | Execution time per route-point evaluation on mobile edge. | Target $< 50$ ms |
+| **Battery Drain** | Energy consumed by background trajectory tracking. | Target $< 2.5\%$ battery / hour |
+
+---
+
+## 5. Important Research Principles
+
+1. **Risk Estimation, Not Certainty:**  
+   WEGOTCHU is intended to **estimate risk and identify unusual patterns, not to make absolute claims about whether someone is safe or unsafe**.
+2. **Evidence, Not Decision:**  
+   An AI-generated result is treated as one source of evidence within a broader safety context.
+3. **Separation of Policy and Intelligence:**  
+   Any real-world intervention, such as a proactive check-in, will be controlled by a separate, deterministic safety-policy layer rather than being decided directly by a generative AI model.
