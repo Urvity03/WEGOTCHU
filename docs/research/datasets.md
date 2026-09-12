@@ -78,12 +78,51 @@ The following peer-reviewed academic datasets are currently under evaluation for
    * *Role in WEGOTCHU:* Negative-class noise suppression to reduce audio false positives.
 
 ### C. Geospatial & Trajectory
-1. **GeoLife GPS Trajectories (Microsoft Research Asia):**
-   * *Modality:* GPS coordinates, altitude, timestamp.
-   * *Labels:* Routine commute corridors, walking trajectories, transit modes.
-   * *Role in WEGOTCHU:* Evaluating route deviation algorithms and personal spatial baselines.
 
----
+#### GeoLife GPS Trajectories — Microsoft Research Asia
+
+- **Modality:** GPS / geospatial trajectory
+- **Source:** Microsoft Research GeoLife GPS Trajectories
+- **Official URL:** https://www.microsoft.com/en-ie/download/details.aspx?id=52367
+- **Data Category:** Public benchmark dataset
+- **Number of Users:** 182, according to the official download page
+- **Number of Trajectories:** Approximately 17,621
+- **Available Fields:** Latitude, longitude, altitude, date, time, and trajectory file identity
+- **Timestamp Resolution:** Irregular; sampling intervals vary
+- **Trip Segmentation:** Trajectories are provided as separate files and can be treated as separate trips or sessions
+- **Geographic Coverage:** Outdoor movement recorded through the GeoLife project
+- **Annotations:** Some transportation-mode labels may be available, but the dataset does not contain safety or danger labels
+- **Target Use Case:** Personalized route-deviation and mobility-baseline research
+- **Derived Fields:** Speed, bearing, distance, stop duration, and deviation score
+- **Missing / Noisy GPS Points:** Possible GPS gaps, noise, and irregular sampling
+- **Accelerometer Availability:** Not available
+- **Audio Availability:** Not available
+- **Safety Labels:** Not available
+- **Privacy Concerns:** GPS traces represent human mobility and must remain outside Git
+- **Commercial-Use Restrictions:** Verify the source’s current access and usage terms before startup or commercial use
+- **Known Limitations:** The dataset does not label routes as safe, dangerous, or unsafe
+- **Phase 1 Recommendation:** Suitable for route-anomaly research, not direct danger classification
+
+#### Compatibility with the WEGOTCHU GPS Contract
+
+GeoLife provides:
+
+- `timestamp`
+- `location.latitude`
+- `location.longitude`
+- `location.altitude_meters`
+
+The following fields must be derived or left unavailable:
+
+- `speed_mps`: derive from consecutive GPS points
+- `bearing_degrees`: derive from consecutive GPS points
+- `accuracy_meters`: keep null if unavailable
+- `device_id`: map to an anonymized user identifier
+- `trajectory_id`: create from the source trajectory file
+
+The dataset does not provide accelerometer, audio, or vision data. These modalities are outside the scope of the Phase 1 GPS experiment.
+
+GeoLife does not contain real safety or danger labels. Phase 1 will evaluate route anomaly using historical trajectories and clearly documented controlled or synthetic evaluation cases.
 
 ## 4. Controlled Data Collection Protocol (Drafting Guidelines)
 
