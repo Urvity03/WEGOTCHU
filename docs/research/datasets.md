@@ -117,12 +117,86 @@ The following fields must be derived or left unavailable:
 - `speed_mps`: derive from consecutive GPS points
 - `bearing_degrees`: derive from consecutive GPS points
 - `accuracy_meters`: keep null if unavailable
-- `device_id`: map to an anonymized user identifier
+- `device_id`: map to an anonymized source-user identifier
 - `trajectory_id`: create from the source trajectory file
 
 The dataset does not provide accelerometer, audio, or vision data. These modalities are outside the scope of the Phase 1 GPS experiment.
 
 GeoLife does not contain real safety or danger labels. Phase 1 will evaluate route anomaly using historical trajectories and clearly documented controlled or synthetic evaluation cases.
+
+#### Phase 1 Candidate Assessment
+
+GeoLife is currently the **primary candidate** for the Phase 1 route-deviation experiment. It is not yet considered the final dataset until the team validates its structure, access terms, sampling behavior, and suitability.
+
+The dataset contains multiple users and multiple trajectories associated with users. This allows the team to:
+
+1. Build a route baseline for an individual user.
+2. Hold out some trajectories from that user for testing.
+3. Compare a personalized baseline with a general population baseline.
+
+The dataset should not be treated as globally representative because its geographic coverage and mobility patterns come from the original GeoLife collection. Results should be reported as a proof of concept on historical mobility data.
+
+The raw dataset will remain outside GitHub. Only metadata, documentation, and reproducible processing instructions may be committed.
+
+#### Phase 1 Candidate Assessment
+
+GeoLife is currently the **primary candidate** for the Phase 1 route-deviation experiment. It is not yet the final dataset until the team validates its structure, access terms, sampling behavior, and suitability.
+
+##### Repeated Trajectories and Personalization
+
+The dataset contains multiple users and multiple trajectory files associated with users. This allows the team to:
+
+1. Build a route baseline for an individual user.
+2. Hold out some trajectories from that user for testing.
+3. Compare a personalized baseline with a general population baseline.
+
+The exact number of usable trajectories per user must be verified during dataset inspection because the data volume may not be equal for every user.
+
+##### Sampling Variability
+
+GeoLife trajectories have irregular sampling intervals. Some tracks are densely sampled, while others may contain larger time or distance gaps.
+
+The preprocessing stage must:
+
+- Preserve the original timestamps.
+- Measure time differences between consecutive points.
+- Detect unusually large gaps.
+- Avoid assuming a fixed sampling rate.
+- Resample only if required by a later experiment.
+
+##### Geographic Limitations
+
+The dataset represents the geographic and mobility context of the original GeoLife collection. It should not be treated as globally representative of all cities, countries, users, or travel behaviors.
+
+Results may be affected by:
+
+- Limited geographic coverage.
+- Local road and transport patterns.
+- Differences in travel modes.
+- Historical collection conditions.
+- Unequal data volume between users.
+
+Therefore, Phase 1 results should be reported as a proof of concept on historical mobility data, not as universal safety performance.
+
+##### Access and License Considerations
+
+The dataset source and current access terms must be recorded before use. The team must not assume that academic access automatically permits commercial or startup use.
+
+The raw dataset will remain outside GitHub. Only documentation, metadata, and reproducible processing instructions may be committed.
+
+##### Suitability Decision
+
+GeoLife is suitable as the primary Phase 1 candidate because it provides:
+
+- Multiple users
+- Repeated trajectories
+- Latitude and longitude
+- Timestamps
+- Historical trajectory sequences
+
+The team will make the final dataset decision after validating the extracted file structure, usable trajectory counts, sampling behavior, and access terms.
+
+---
 
 ## 4. Controlled Data Collection Protocol (Drafting Guidelines)
 
