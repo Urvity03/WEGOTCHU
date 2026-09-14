@@ -124,19 +124,6 @@ The dataset does not provide accelerometer, audio, or vision data. These modalit
 
 GeoLife does not contain real safety or danger labels. Phase 1 will evaluate route anomaly using historical trajectories and clearly documented controlled or synthetic evaluation cases.
 
-#### Phase 1 Candidate Assessment
-
-GeoLife is currently the **primary candidate** for the Phase 1 route-deviation experiment. It is not yet considered the final dataset until the team validates its structure, access terms, sampling behavior, and suitability.
-
-The dataset contains multiple users and multiple trajectories associated with users. This allows the team to:
-
-1. Build a route baseline for an individual user.
-2. Hold out some trajectories from that user for testing.
-3. Compare a personalized baseline with a general population baseline.
-
-The dataset should not be treated as globally representative because its geographic coverage and mobility patterns come from the original GeoLife collection. Results should be reported as a proof of concept on historical mobility data.
-
-The raw dataset will remain outside GitHub. Only metadata, documentation, and reproducible processing instructions may be committed.
 
 #### Phase 1 Candidate Assessment
 
