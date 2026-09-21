@@ -3,7 +3,6 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-
 DEFAULT_SAMPLE_RATE = 16000
 
 

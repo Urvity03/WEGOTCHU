@@ -34,6 +34,4 @@ def aggregate_mfcc(mfcc: np.ndarray) -> np.ndarray:
     mean_features = np.mean(mfcc, axis=1)
     std_features = np.std(mfcc, axis=1)
 
-    return np.concatenate(
-        [mean_features, std_features]
-    ).astype(np.float32)
+    return np.concatenate([mean_features, std_features]).astype(np.float32)
