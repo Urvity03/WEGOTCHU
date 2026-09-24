@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 SOURCE_COLUMNS = [
     "latitude",
     "longitude",
@@ -50,6 +49,11 @@ def parse_trajectory(
         names=SOURCE_COLUMNS,
     )
 
+    if frame.empty:
+        raise ValueError(
+            f"Trajectory contains no observation rows: {trajectory_path.name}"
+        )
+
     original_rows = len(frame)
 
     frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
@@ -60,6 +64,7 @@ def parse_trajectory(
 
     frame["timestamp"] = pd.to_datetime(
         frame["date"].astype(str) + " " + frame["time"].astype(str),
+        format="%Y-%m-%d %H:%M:%S",
         errors="coerce",
     )
 
@@ -68,20 +73,17 @@ def parse_trajectory(
     frame["altitude_meters"] = frame["altitude_feet"] * 0.3048
 
     invalid_timestamp = frame["timestamp"].isna()
-    invalid_coordinates = (
-        ~frame["latitude"].between(-90, 90)
-        | ~frame["longitude"].between(-180, 180)
-    )
+    invalid_coordinates = ~frame["latitude"].between(-90, 90) | ~frame[
+        "longitude"
+    ].between(-180, 180)
 
     valid_rows = ~(invalid_timestamp | invalid_coordinates)
     frame = frame.loc[valid_rows].copy()
     frame = frame.sort_values("timestamp").reset_index(drop=True)
 
-    relative_path = trajectory_path.relative_to(dataset_root)
-    source_user_id = relative_path.parts[0]
+    source_user_id = trajectory_path.parent.parent.name
     user_id = f"geolife_{source_user_id}"
     trajectory_id = f"{user_id}/{trajectory_path.stem}"
-
     frame["user_id"] = user_id
     frame["trajectory_id"] = trajectory_id
 
@@ -162,7 +164,9 @@ def preprocess_dataset(
                 totals[key] += value
 
             if index % 1000 == 0:
-                print(f"Processed {index}/{len(trajectory_paths)} trajectories")
+                print(
+                    f"Processed {index}/{len(trajectory_paths)} trajectories"
+                )
 
     print("Preprocessing complete.")
     print("Trajectory files:", len(trajectory_paths))
