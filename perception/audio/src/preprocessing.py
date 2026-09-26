@@ -4,6 +4,7 @@ import librosa
 import numpy as np
 
 DEFAULT_SAMPLE_RATE = 16000
+MIN_AUDIO_SAMPLES = 2048
 
 
 def load_audio(
@@ -12,18 +13,6 @@ def load_audio(
 ) -> tuple[np.ndarray, int]:
     """
     Load an audio file as mono waveform.
-
-    Parameters
-    ----------
-    file_path:
-        Path to the audio file.
-    sample_rate:
-        Target sampling rate.
-
-    Returns
-    -------
-    tuple[np.ndarray, int]
-        Audio waveform and sampling rate.
     """
     file_path = Path(file_path)
 
@@ -39,6 +28,14 @@ def load_audio(
     if audio.size == 0:
         raise ValueError("Audio file contains no samples.")
 
+    if not np.all(np.isfinite(audio)):
+        raise ValueError("Audio file contains NaN or Inf values.")
+
+    if audio.size < MIN_AUDIO_SAMPLES:
+        raise ValueError(
+            f"Audio is too short. Minimum required samples: " f"{MIN_AUDIO_SAMPLES}."
+        )
+
     return audio.astype(np.float32), sr
 
 
@@ -50,6 +47,9 @@ def normalize_audio(audio: np.ndarray) -> np.ndarray:
 
     if audio.size == 0:
         raise ValueError("Audio array is empty.")
+
+    if not np.all(np.isfinite(audio)):
+        raise ValueError("Audio array contains NaN or Inf values.")
 
     peak = np.max(np.abs(audio))
 
@@ -70,7 +70,8 @@ def preprocess_audio(
     1. Load audio.
     2. Convert to mono.
     3. Resample to target sample rate.
-    4. Normalize amplitude.
+    4. Validate waveform.
+    5. Normalize amplitude.
     """
     audio, sr = load_audio(
         file_path=file_path,
