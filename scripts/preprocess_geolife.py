@@ -58,9 +58,7 @@ def parse_trajectory(
 
     frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
     frame["longitude"] = pd.to_numeric(frame["longitude"], errors="coerce")
-    frame["altitude_feet"] = pd.to_numeric(
-        frame["altitude_feet"], errors="coerce"
-    )
+    frame["altitude_feet"] = pd.to_numeric(frame["altitude_feet"], errors="coerce")
 
     frame["timestamp"] = pd.to_datetime(
         frame["date"].astype(str) + " " + frame["time"].astype(str),
@@ -89,12 +87,8 @@ def parse_trajectory(
 
     # Gaps are measured within each source trajectory. No interpolation or
     # segmentation is performed. The threshold is a provisional flag only.
-    frame["gap_seconds"] = (
-        frame["timestamp"].diff().dt.total_seconds().fillna(0)
-    )
-    frame["is_gap_over_threshold"] = (
-        frame["gap_seconds"] > gap_threshold_seconds
-    )
+    frame["gap_seconds"] = frame["timestamp"].diff().dt.total_seconds().fillna(0)
+    frame["is_gap_over_threshold"] = frame["gap_seconds"] > gap_threshold_seconds
 
     # GeoLife does not provide GPS accuracy. Leave it unavailable.
     frame["accuracy_meters"] = pd.NA
@@ -155,18 +149,14 @@ def preprocess_dataset(
                 ) from error
 
             # Convert missing values to blank CSV fields.
-            records = trajectory.astype(object).where(
-                pd.notna(trajectory), None
-            )
+            records = trajectory.astype(object).where(pd.notna(trajectory), None)
             writer.writerows(records.to_dict(orient="records"))
 
             for key, value in summary.items():
                 totals[key] += value
 
             if index % 1000 == 0:
-                print(
-                    f"Processed {index}/{len(trajectory_paths)} trajectories"
-                )
+                print(f"Processed {index}/{len(trajectory_paths)} trajectories")
 
     print("Preprocessing complete.")
     print("Trajectory files:", len(trajectory_paths))
@@ -194,11 +184,7 @@ def main() -> None:
         "--output",
         type=Path,
         default=(
-            project_root
-            / "data"
-            / "processed"
-            / "geolife"
-            / "geolife_trajectories.csv"
+            project_root / "data" / "processed" / "geolife" / "geolife_trajectories.csv"
         ),
         help="Destination CSV path. Keep generated data out of Git.",
     )
@@ -218,9 +204,7 @@ def main() -> None:
         parser.error("--gap-threshold-seconds must be greater than zero")
 
     if not args.input_dir.is_dir():
-        raise FileNotFoundError(
-            f"Dataset directory does not exist: {args.input_dir}"
-        )
+        raise FileNotFoundError(f"Dataset directory does not exist: {args.input_dir}")
 
     preprocess_dataset(
         dataset_root=args.input_dir,
