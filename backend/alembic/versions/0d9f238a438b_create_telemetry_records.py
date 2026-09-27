@@ -1,7 +1,7 @@
 """create telemetry records
 
 Revision ID: 0d9f238a438b
-Revises: 
+Revises:
 Create Date: 2026-09-26 20:06:51.405733
 
 """
