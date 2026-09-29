@@ -67,7 +67,15 @@ class MainActivity : ComponentActivity() {
         val locationManager =
             getSystemService(LOCATION_SERVICE) as LocationManager
 
-        locationCollector = LocationCollector(locationManager)
+        locationCollector = LocationCollector(
+            locationManager = locationManager,
+            permissionChecker = { permission ->
+                ContextCompat.checkSelfPermission(
+                    this,
+                    permission
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        )
 
         val batteryCollector = BatteryCollector(this)
 
@@ -99,16 +107,19 @@ class MainActivity : ComponentActivity() {
 
         sensorCollector.start()
 
-        if (
+        val fineLocationGranted =
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED ||
+            ) == PackageManager.PERMISSION_GRANTED
+
+        val coarseLocationGranted =
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.ACCESS_COARSE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
-        ) {
+
+        if (fineLocationGranted || coarseLocationGranted) {
             locationCollector.start()
             startTelemetryTest()
         } else {

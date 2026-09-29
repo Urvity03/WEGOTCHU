@@ -1,5 +1,6 @@
 package com.wegotchu.app.location
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.location.Location
 import android.location.LocationListener
@@ -18,7 +19,8 @@ data class LocationSample(
 )
 
 class LocationCollector(
-    private val locationManager: LocationManager
+    private val locationManager: LocationManager,
+    private val permissionChecker: (String) -> Boolean
 ) {
 
     private var latestLocation: LocationSample? = null
@@ -33,41 +35,34 @@ class LocationCollector(
     @SuppressLint("MissingPermission")
     fun start() {
 
-        // Try to use an existing location immediately.
-        val lastGpsLocation =
-            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+        val fineLocationGranted =
+            permissionChecker(Manifest.permission.ACCESS_FINE_LOCATION)
+
+        val coarseLocationGranted =
+            permissionChecker(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+        if (!fineLocationGranted && !coarseLocationGranted) {
+            Log.e(
+                "LocationCollector",
+                "Location permission is not granted"
+            )
+            return
+        }
+
+        // GPS requires fine location permission.
+        if (
+            shouldUseGps(fineLocationGranted) &&
+            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        ) {
+            val lastGpsLocation =
                 locationManager.getLastKnownLocation(
                     LocationManager.GPS_PROVIDER
                 )
-            } else {
-                null
+
+            if (lastGpsLocation != null) {
+                updateLatestLocation(lastGpsLocation)
             }
 
-        val lastNetworkLocation =
-            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                locationManager.getLastKnownLocation(
-                    LocationManager.NETWORK_PROVIDER
-                )
-            } else {
-                null
-            }
-
-        // Use whichever available location is newer.
-        val lastKnownLocation = listOfNotNull(
-            lastGpsLocation,
-            lastNetworkLocation
-        ).maxByOrNull { it.time }
-
-        if (lastKnownLocation != null) {
-            updateLatestLocation(lastKnownLocation)
-
-            Log.d(
-                "LocationCollector",
-                "Using last known location"
-            )
-        }
-
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             locationManager.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER,
                 1000L,
@@ -77,7 +72,23 @@ class LocationCollector(
             )
         }
 
-        if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+        // Network provider can be used with coarse location.
+        if (
+            coarseLocationGranted &&
+            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        ) {
+            val lastNetworkLocation =
+                locationManager.getLastKnownLocation(
+                    LocationManager.NETWORK_PROVIDER
+                )
+
+            if (
+                lastNetworkLocation != null &&
+                shouldReplaceCurrentLocation(lastNetworkLocation)
+            ) {
+                updateLatestLocation(lastNetworkLocation)
+            }
+
             locationManager.requestLocationUpdates(
                 LocationManager.NETWORK_PROVIDER,
                 1000L,
@@ -134,13 +145,23 @@ class LocationCollector(
         )
 
         latestLocation = sample
+    }
+    private fun shouldReplaceCurrentLocation(location: Location): Boolean {
 
-        Log.d(
-            "LocationCollector",
-            "Location: lat=${sample.latitude}, " +
-                    "lon=${sample.longitude}, " +
-                    "accuracy=${sample.accuracyMeters}m, " +
-                    "speed=${sample.speedMps}"
-        )
+        val current = latestLocation ?: return true
+
+        val isNewer = location.time > current.timestampMillis
+
+        val isMoreAccurate =
+            location.accuracy < current.accuracyMeters
+
+        return isNewer && isMoreAccurate
+    }
+    companion object {
+        internal fun shouldUseGps(
+            fineLocationGranted: Boolean
+        ): Boolean {
+            return fineLocationGranted
+        }
     }
 }
