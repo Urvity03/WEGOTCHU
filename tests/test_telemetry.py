@@ -79,9 +79,9 @@ def test_valid_telemetry():
     }
 
     response = client.post(
-    "/api/v1/telemetry",
-    json=payload,
-    headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+        "/api/v1/telemetry",
+        json=payload,
+        headers={"Authorization": f"Bearer {TEST_TOKEN}"},
     )
 
     assert response.status_code == 200
@@ -117,9 +117,9 @@ def test_invalid_latitude():
     }
 
     response = client.post(
-    "/api/v1/telemetry",
-    json=payload,
-    headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+        "/api/v1/telemetry",
+        json=payload,
+        headers={"Authorization": f"Bearer {TEST_TOKEN}"},
     )
 
     assert response.status_code == 422

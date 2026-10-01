@@ -34,21 +34,9 @@ async def receive_telemetry(
         accelerometer_x=payload.accelerometer.x,
         accelerometer_y=payload.accelerometer.y,
         accelerometer_z=payload.accelerometer.z,
-        gyroscope_x=(
-            payload.gyroscope.x
-            if payload.gyroscope is not None
-            else None
-        ),
-        gyroscope_y=(
-            payload.gyroscope.y
-            if payload.gyroscope is not None
-            else None
-        ),
-        gyroscope_z=(
-            payload.gyroscope.z
-            if payload.gyroscope is not None
-            else None
-        ),
+        gyroscope_x=(payload.gyroscope.x if payload.gyroscope is not None else None),
+        gyroscope_y=(payload.gyroscope.y if payload.gyroscope is not None else None),
+        gyroscope_z=(payload.gyroscope.z if payload.gyroscope is not None else None),
         battery_level=payload.battery_level,
         network_status=payload.network_status,
     )
