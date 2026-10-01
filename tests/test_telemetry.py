@@ -1,6 +1,11 @@
+import os
 import sys
 
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-ci-only-32-bytes")
+
 sys.path.insert(0, ".")
+
+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key")
 
 from backend.app.auth import create_access_token
 from fastapi.testclient import TestClient
