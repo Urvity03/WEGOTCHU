@@ -1,0 +1,1 @@
+"""WEGOTCHU AI package."""
