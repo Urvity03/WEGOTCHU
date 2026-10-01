@@ -76,11 +76,13 @@ class TelemetryBuilder(
                 z = accelerometer.z.toDouble()
             ),
 
-            gyroscope = Gyroscope(
-                x = gyroscope.x.toDouble(),
-                y = gyroscope.y.toDouble(),
-                z = gyroscope.z.toDouble()
-            ),
+            gyroscope = gyroscope?.let {
+                Gyroscope(
+                    x = it.x.toDouble(),
+                    y = it.y.toDouble(),
+                    z = it.z.toDouble()
+                )
+            },
 
             batteryLevel = batteryCollector.getBatteryLevel(),
 

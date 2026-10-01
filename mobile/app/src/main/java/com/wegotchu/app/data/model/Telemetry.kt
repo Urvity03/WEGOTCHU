@@ -52,7 +52,7 @@ data class TelemetryPayload(
 
     val accelerometer: Accelerometer,
 
-    val gyroscope: Gyroscope,
+    val gyroscope: Gyroscope?,
 
     @SerializedName("battery_level")
     val batteryLevel: Double,

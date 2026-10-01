@@ -5,6 +5,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.auth import create_access_token
 
 
 # -------------------------------------------------------------------
@@ -18,15 +19,14 @@ test_engine = create_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+
 Base.metadata.create_all(bind=test_engine)
+
 TestingSessionLocal = sessionmaker(
     bind=test_engine,
     autoflush=False,
     autocommit=False,
 )
-
-
-Base.metadata.create_all(bind=test_engine)
 
 
 def override_get_db():
@@ -43,6 +43,20 @@ client = TestClient(app)
 
 
 # -------------------------------------------------------------------
+# Test authentication
+# -------------------------------------------------------------------
+
+TEST_DEVICE_ID = "test_device_001"
+
+
+def auth_headers(device_id: str = TEST_DEVICE_ID):
+    token = create_access_token(device_id)
+    return {
+        "Authorization": f"Bearer {token}",
+    }
+
+
+# -------------------------------------------------------------------
 # Test payload
 # -------------------------------------------------------------------
 
@@ -50,7 +64,7 @@ client = TestClient(app)
 def valid_payload():
     return {
         "version": "0.1",
-        "device_id": "test_device_001",
+        "device_id": TEST_DEVICE_ID,
         "timestamp": "2026-09-26T17:00:00Z",
         "location": {
             "latitude": 28.6139,
@@ -84,6 +98,7 @@ def test_telemetry_endpoint_accepts_valid_payload():
     response = client.post(
         "/api/v1/telemetry",
         json=valid_payload(),
+        headers=auth_headers(),
     )
 
     assert response.status_code == 200
@@ -92,12 +107,32 @@ def test_telemetry_endpoint_accepts_valid_payload():
 
     assert data["status"] == "accepted"
     assert data["message"] == "Telemetry received successfully"
-    assert data["device_id"] == "test_device_001"
+    assert data["device_id"] == TEST_DEVICE_ID
+
+
+def test_telemetry_endpoint_accepts_missing_gyroscope():
+    payload = valid_payload()
+    payload.pop("gyroscope")
+
+    response = client.post(
+        "/api/v1/telemetry",
+        json=payload,
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["status"] == "accepted"
+    assert data["message"] == "Telemetry received successfully"
+    assert data["device_id"] == TEST_DEVICE_ID
 
 
 def test_telemetry_endpoint_rejects_missing_body():
     response = client.post(
         "/api/v1/telemetry",
+        headers=auth_headers(),
     )
 
     assert response.status_code == 422
@@ -111,6 +146,41 @@ def test_telemetry_endpoint_rejects_invalid_payload():
     response = client.post(
         "/api/v1/telemetry",
         json=payload,
+        headers=auth_headers(),
     )
 
     assert response.status_code == 422
+
+
+def test_telemetry_endpoint_rejects_missing_authentication():
+    response = client.post(
+        "/api/v1/telemetry",
+        json=valid_payload(),
+    )
+
+    assert response.status_code == 403
+
+
+def test_telemetry_endpoint_rejects_invalid_token():
+    response = client.post(
+        "/api/v1/telemetry",
+        json=valid_payload(),
+        headers={
+            "Authorization": "Bearer invalid-token",
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_telemetry_endpoint_rejects_wrong_device_identity():
+    response = client.post(
+        "/api/v1/telemetry",
+        json=valid_payload(),
+        headers=auth_headers("another_device"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Device identity does not match authenticated identity"
+    )

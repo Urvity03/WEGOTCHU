@@ -77,19 +77,19 @@ class TelemetryRecord(Base):
         nullable=False,
     )
 
-    gyroscope_x: Mapped[float] = mapped_column(
+    gyroscope_x: Mapped[float | None] = mapped_column(
         Float,
-        nullable=False,
+        nullable=True,
     )
 
-    gyroscope_y: Mapped[float] = mapped_column(
+    gyroscope_y: Mapped[float | None] = mapped_column(
         Float,
-        nullable=False,
+        nullable=True,
     )
 
-    gyroscope_z: Mapped[float] = mapped_column(
+    gyroscope_z: Mapped[float | None] = mapped_column(
         Float,
-        nullable=False,
+        nullable=True,
     )
 
     battery_level: Mapped[float] = mapped_column(
