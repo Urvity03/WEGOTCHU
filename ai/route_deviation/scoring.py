@@ -88,9 +88,7 @@ def fit_normalizer_from_references(
         target = reference_trajectories[i]
 
         distances = [
-            dtw_distance(target, reference_trajectories[j])
-            for j in range(k)
-            if i != j
+            dtw_distance(target, reference_trajectories[j]) for j in range(k) if i != j
         ]
 
         loo_distances.append(min(distances))
