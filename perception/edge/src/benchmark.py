@@ -68,4 +68,3 @@ def benchmark_audio_inference(
         "measured_runs": measured_runs,
         "model_version": result["model_version"],
     }
-
