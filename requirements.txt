@@ -32,3 +32,6 @@ pytest-cov>=4.1.0,<5.0.0
 black>=24.2.0,<25.0.0
 flake8>=7.0.0,<8.0.0
 isort>=5.13.2,<6.0.0
+
+# Edge AI benchmarking
+psutil>=7.0,<8.0
