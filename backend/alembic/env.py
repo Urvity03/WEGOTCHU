@@ -21,8 +21,8 @@ if config.config_file_name is not None:
 
 
 # Import SQLAlchemy Base and models
-from app.database import Base  # noqa: E402
-from app.models.telemetry_record import TelemetryRecord  # noqa: E402,F401
+from backend.app.database import Base
+from backend.app.models.telemetry_record import TelemetryRecord
 
 # Metadata used by Alembic for autogenerate
 target_metadata = Base.metadata

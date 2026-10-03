@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/v1", tags=["telemetry"])
 
 
 @router.post("/telemetry")
-async def receive_telemetry(
+def receive_telemetry(
     payload: TelemetryPayload,
     db: Session = Depends(get_db),
     current_user_id: str = Depends(get_current_user_id),
@@ -53,7 +53,7 @@ async def receive_telemetry(
 
 
 @router.get("/telemetry/{device_id}")
-async def get_telemetry(
+def get_telemetry(
     device_id: str,
     limit: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),

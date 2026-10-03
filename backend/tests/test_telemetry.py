@@ -3,9 +3,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
-from app.main import app
-from app.auth import create_access_token
+from backend.app.database import Base, get_db
+from backend.app.main import app
+from backend.app.auth import create_access_token
 
 
 # -------------------------------------------------------------------
