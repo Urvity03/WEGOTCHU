@@ -18,10 +18,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(
-            "String",
-            "TELEMETRY_BASE_URL",
-            "\"https://YOUR-HTTPS-BACKEND/\""
-        )
+   	 "String",
+    	 "TELEMETRY_BASE_URL",
+    	 "\"http://10.118.215.90:8000/\""
+	)
     }
 
     buildTypes {

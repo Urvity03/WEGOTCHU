@@ -42,14 +42,6 @@ class TelemetryBuilder(
 
         val gyroscope = imuSnapshot.gyroscope
 
-        if (gyroscope == null) {
-            Log.d(
-                "TelemetryBuilder",
-                "Waiting for gyroscope data..."
-            )
-            return null
-        }
-
         val payload = TelemetryPayload(
             version = "0.1",
 

@@ -1,5 +1,6 @@
 package com.wegotchu.app.sensors
 
+import com.wegotchu.app.BuildConfig
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -113,14 +114,7 @@ class SensorCollector(
             z = event.values[2]
         )
 
-        Log.d(
-            "SensorCollector",
-            "${event.sensor.name}: " +
-                    "x=${event.values[0]}, " +
-                    "y=${event.values[1]}, " +
-                    "z=${event.values[2]}"
-        )
-
+        
         synchronized(lock) {
             when (event.sensor.type) {
 

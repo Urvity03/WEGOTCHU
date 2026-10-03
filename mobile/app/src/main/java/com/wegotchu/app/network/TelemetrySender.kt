@@ -10,7 +10,12 @@ class TelemetrySender {
     suspend fun send(payload: TelemetryPayload): Boolean {
         return try {
 
-            val response = api.sendTelemetry(payload)
+            val token = AuthTokenProvider.getToken()
+
+            val response = api.sendTelemetry(
+                authorization = "Bearer $token",
+                payload = payload
+            )
 
             if (response.isSuccessful) {
                 Log.d(

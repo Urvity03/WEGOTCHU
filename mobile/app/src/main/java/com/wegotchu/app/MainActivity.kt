@@ -56,7 +56,9 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+       super.onCreate(savedInstanceState)
+
+       Log.d("MainActivity", "onCreate() started")
         enableEdgeToEdge()
 
         val sensorManager =
@@ -103,8 +105,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onResume() {
-        super.onResume()
+      super.onResume()
 
+      Log.d("MainActivity", "onResume() started")
         sensorCollector.start()
 
         val fineLocationGranted =
@@ -134,7 +137,9 @@ class MainActivity : ComponentActivity() {
 
     private fun startTelemetryTest() {
 
-        lifecycleScope.launch {
+      Log.d("MainActivity", "startTelemetryTest() called")
+
+      lifecycleScope.launch {
 
             Log.d(
                 "TelemetrySender",
