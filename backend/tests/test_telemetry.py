@@ -60,6 +60,7 @@ def auth_headers(device_id: str = TEST_DEVICE_ID):
 # Test payload
 # -------------------------------------------------------------------
 
+
 def valid_payload():
     return {
         "version": "0.1",
@@ -91,6 +92,7 @@ def valid_payload():
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_telemetry_endpoint_accepts_valid_payload():
     response = client.post(
