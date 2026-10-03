@@ -6,6 +6,7 @@ import com.wegotchu.app.data.model.Gyroscope
 import com.wegotchu.app.data.model.Location
 import com.wegotchu.app.data.model.TelemetryPayload
 import com.wegotchu.app.location.LocationCollector
+import com.wegotchu.app.network.AuthTokenProvider
 import com.wegotchu.app.sensors.SensorCollector
 import java.time.Instant
 
@@ -45,9 +46,8 @@ class TelemetryBuilder(
         val payload = TelemetryPayload(
             version = "0.1",
 
-            // Synthetic ID for prototype/testing.
-            // Do not replace with a real personal identifier yet.
-            deviceId = "usr_dev_example",
+            // Device identity comes from local.properties.
+            deviceId = AuthTokenProvider.getDeviceId(),
 
             timestamp = Instant.now().toString(),
 

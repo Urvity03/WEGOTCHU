@@ -60,7 +60,6 @@ def auth_headers(device_id: str = TEST_DEVICE_ID):
 # Test payload
 # -------------------------------------------------------------------
 
-
 def valid_payload():
     return {
         "version": "0.1",
@@ -92,7 +91,6 @@ def valid_payload():
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
-
 
 def test_telemetry_endpoint_accepts_valid_payload():
     response = client.post(
@@ -158,7 +156,7 @@ def test_telemetry_endpoint_rejects_missing_authentication():
         json=valid_payload(),
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 def test_telemetry_endpoint_rejects_invalid_token():

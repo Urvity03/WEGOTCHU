@@ -28,8 +28,20 @@ class LocationCollector(
     private val locationListener = object : LocationListener {
 
         override fun onLocationChanged(location: Location) {
-            updateLatestLocation(location)
-        }
+    if (shouldReplaceCurrentLocation(location)) {
+        updateLatestLocation(location)
+
+        Log.d(
+            "LocationCollector",
+            "Accepted location: accuracy=${location.accuracy}m"
+        )
+    } else {
+        Log.d(
+            "LocationCollector",
+            "Ignored poorer/stale location: accuracy=${location.accuracy}m"
+        )
+    }
+}
     }
 
     @SuppressLint("MissingPermission")
