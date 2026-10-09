@@ -114,7 +114,7 @@ class SensorCollector(
             z = event.values[2]
         )
 
-        
+
         synchronized(lock) {
             when (event.sensor.type) {
 
