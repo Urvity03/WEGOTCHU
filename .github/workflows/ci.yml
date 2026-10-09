@@ -46,5 +46,6 @@ jobs:
       - name: Run backend test suite
         env:
           DATABASE_URL: sqlite://
+          JWT_SECRET_KEY: ci-test-secret-key-not-for-production
         run: |
           python -m pytest backend/tests/ -v
