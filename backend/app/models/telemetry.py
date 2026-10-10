@@ -30,6 +30,6 @@ class TelemetryPayload(BaseModel):
     speed_mps: float | None = Field(default=None, ge=0)
     bearing_degrees: float | None = Field(default=None, ge=0, lt=360)
     accelerometer: Accelerometer
-    gyroscope: Gyroscope
+    gyroscope: Gyroscope | None = None
     battery_level: float = Field(ge=0.0, le=1.0)
     network_status: str
