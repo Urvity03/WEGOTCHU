@@ -73,6 +73,10 @@ def fit_normalizer_from_references(
     For each reference trajectory, calculate its minimum DTW distance
     to the other reference trajectories. These distances form the
     historical baseline distribution.
+
+    Each unique pair is evaluated once because DTW distance is symmetric.
+    Its distance updates the nearest-reference distance for both
+    trajectories, preserving the original leave-one-out calculation.
     """
     k = len(reference_trajectories)
 
@@ -82,19 +86,23 @@ def fit_normalizer_from_references(
             max_distance=100.0,
         )
 
-    loo_distances: list[float] = []
+    nearest_distances = [float("inf")] * k
 
     for i in range(k):
-        target = reference_trajectories[i]
+        for j in range(i + 1, k):
+            distance = dtw_distance(
+                reference_trajectories[i],
+                reference_trajectories[j],
+            )
 
-        distances = [
-            dtw_distance(target, reference_trajectories[j]) for j in range(k) if i != j
-        ]
+            if distance < nearest_distances[i]:
+                nearest_distances[i] = distance
 
-        loo_distances.append(min(distances))
+            if distance < nearest_distances[j]:
+                nearest_distances[j] = distance
 
-    min_dist = float(min(loo_distances))
-    max_dist = float(max(loo_distances))
+    min_dist = float(min(nearest_distances))
+    max_dist = float(max(nearest_distances))
 
     # Avoid division by zero when all historical routes are identical.
     if max_dist <= min_dist:
