@@ -72,23 +72,27 @@ def evaluate_candidates(
     def get_split(t_id: str) -> str | None:
         if t_id in split_map:
             return split_map[t_id]
+
         parent_id = t_id.split("_seg")[0]
         return split_map.get(parent_id)
 
-    # 1. Identify users and organize their static reference trajectories for normalizer fitting
+    # 1. Identify users and organize their static reference trajectories for normalizer fitting.
     user_reference_trajs: dict[str, list[Trajectory]] = {}
+
     for traj in trajectories:
         split = get_split(traj.trajectory_id)
+
         if split == "reference":
             user_reference_trajs.setdefault(traj.user_id, []).append(traj)
 
-    # Fit a static, leakage-safe normalizer per user using only their reference trajectories
+    # Fit a static, leakage-safe normalizer per user using only reference trajectories.
     user_normalizers: dict[str, ScoreNormalizer] = {}
+
     for u_id, ref_list in user_reference_trajs.items():
         if len(ref_list) >= 2:
             user_normalizers[u_id] = fit_normalizer_from_references(ref_list)
 
-    # 2. Evaluate only validation and test candidates
+    # 2. Evaluate only validation and test candidates.
     eval_results: list[tuple[str, RouteDeviationResult]] = []
 
     val_candidates = 0
@@ -101,14 +105,22 @@ def evaluate_candidates(
     successful_scores: list[float] = []
     successful_distances: list[float] = []
 
-    # Sort all trajectories chronologically to ensure deterministic expanding evaluation
+    # Sort trajectories chronologically for deterministic expanding evaluation.
     sorted_trajectories = sorted(
         trajectories,
         key=lambda t: (t.points[0].timestamp, t.trajectory_id),
     )
 
+    # Index trajectories by user once, avoiding scans through unrelated users.
+    # Each user's list inherits the chronological ordering above.
+    trajectories_by_user: dict[str, list[Trajectory]] = {}
+
+    for traj in sorted_trajectories:
+        trajectories_by_user.setdefault(traj.user_id, []).append(traj)
+
     for candidate in sorted_trajectories:
         split = get_split(candidate.trajectory_id)
+
         if split not in ("validation", "test"):
             continue
 
@@ -117,9 +129,11 @@ def evaluate_candidates(
         elif split == "test":
             test_candidates += 1
 
-        # Build expanding reference set (same user, strictly preceding candidate)
+        # Search only this user's trajectories.
+        # build_reference_set still enforces strict temporal precedence,
+        # excludes the candidate, and returns chronological references.
         ref_result = build_reference_set(
-            trajectories=sorted_trajectories,
+            trajectories=trajectories_by_user[candidate.user_id],
             candidate_trajectory=candidate,
             min_history=k_min,
         )
@@ -139,6 +153,7 @@ def evaluate_candidates(
                 val_insufficient += 1
             else:
                 test_insufficient += 1
+
         elif result.status == "SUCCESS":
             if split == "validation":
                 val_success += 1
@@ -147,6 +162,7 @@ def evaluate_candidates(
 
             if result.route_deviation_score is not None:
                 successful_scores.append(result.route_deviation_score)
+
             if result.raw_distance_meters is not None:
                 successful_distances.append(result.raw_distance_meters)
 
@@ -202,6 +218,7 @@ def print_summary(summary: EvaluationSummary) -> None:
     total_successful = (
         summary.successful_validation_scores + summary.successful_test_scores
     )
+
     print(f"Total Candidates Evaluated   : {total_evaluated}")
     print(f"Total Successful Scores      : {total_successful}")
     print("-" * 60)
@@ -209,7 +226,9 @@ def print_summary(summary: EvaluationSummary) -> None:
     if summary.score_mean is not None:
         print(
             f"Normalized Score (min/mean/max): "
-            f"{summary.score_min:.4f} / {summary.score_mean:.4f} / {summary.score_max:.4f}"
+            f"{summary.score_min:.4f} / "
+            f"{summary.score_mean:.4f} / "
+            f"{summary.score_max:.4f}"
         )
     else:
         print("Normalized Score (min/mean/max): N/A (no successful scores)")
@@ -217,10 +236,13 @@ def print_summary(summary: EvaluationSummary) -> None:
     if summary.raw_distance_mean is not None:
         print(
             f"Raw DTW Distance (m) (min/mean/max): "
-            f"{summary.raw_distance_min:.2f} / {summary.raw_distance_mean:.2f} / {summary.raw_distance_max:.2f}"
+            f"{summary.raw_distance_min:.2f} / "
+            f"{summary.raw_distance_mean:.2f} / "
+            f"{summary.raw_distance_max:.2f}"
         )
     else:
         print("Raw DTW Distance (m) (min/mean/max): N/A (no successful scores)")
+
     print("=" * 60)
 
 
@@ -230,6 +252,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate WEGOTCHU route-deviation baseline on GeoLife split manifest."
     )
+
     parser.add_argument(
         "--data",
         type=Path,
@@ -238,6 +261,7 @@ def main() -> None:
         ),
         help="Path to preprocessed GeoLife trajectories CSV.",
     )
+
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -250,6 +274,7 @@ def main() -> None:
         ),
         help="Path to chronological GeoLife split manifest CSV.",
     )
+
     parser.add_argument(
         "--k-min",
         type=int,
@@ -262,13 +287,13 @@ def main() -> None:
     if not args.data.is_file():
         raise FileNotFoundError(
             f"Processed GeoLife trajectory data not found at: {args.data}\n"
-            f"Please run 'python scripts/preprocess_geolife.py' first."
+            "Please run 'python scripts/preprocess_geolife.py' first."
         )
 
     if not args.manifest.is_file():
         raise FileNotFoundError(
             f"GeoLife split manifest not found at: {args.manifest}\n"
-            f"Please run 'python scripts/create_geolife_split_manifest.py' first."
+            "Please run 'python scripts/create_geolife_split_manifest.py' first."
         )
 
     print(f"Loading trajectories from {args.data}...")
