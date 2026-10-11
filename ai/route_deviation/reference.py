@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -105,6 +106,73 @@ def build_reference_set(
     # Rule 4: Deterministic chronological ordering from oldest to newest
     # Tie-break on trajectory_id for absolute determinism if start timestamps match
     eligible.sort(key=lambda t: (t.points[0].timestamp, t.trajectory_id))
+
+    is_sufficient = len(eligible) >= min_history
+    status = STATUS_SUFFICIENT if is_sufficient else STATUS_INSUFFICIENT_HISTORY
+
+    return ReferenceSetResult(
+        user_id=user_id,
+        candidate_id=candidate_id,
+        is_sufficient=is_sufficient,
+        status=status,
+        trajectories=tuple(eligible),
+    )
+
+
+def build_reference_set_from_sorted(
+    user_trajectories: Sequence[Trajectory],
+    candidate_trajectory: Trajectory,
+    min_history: int = MIN_HISTORICAL_TRAJECTORIES,
+) -> ReferenceSetResult:
+    """
+    Identify and return the valid historical reference set using binary search.
+
+    Preconditions:
+        1. Same User: user_trajectories must contain trajectories belonging solely
+           to candidate_trajectory.user_id.
+        2. Sorted Input: user_trajectories must be sorted chronologically by
+           (points[0].timestamp, trajectory_id).
+
+    Guarantees:
+        - Strict Temporal Precedence: Finds the first trajectory with start
+          timestamp >= candidate start timestamp using bisect_left, taking only
+          the strictly earlier prefix.
+        - Equal-Time & Future Exclusion: All trajectories starting at or after
+          candidate start timestamp are excluded.
+        - Candidate Exclusion: Candidate is strictly excluded by trajectory_id,
+          even if present in the historical prefix.
+        - Deterministic Ordering: Preserves the existing (start_time, trajectory_id)
+          ordering.
+        - Cold-Start Enforcement: Reports INSUFFICIENT_HISTORY if historical count
+          < min_history.
+    """
+    if not isinstance(candidate_trajectory, Trajectory):
+        raise TypeError(
+            f"Expected candidate_trajectory to be a Trajectory, got {type(candidate_trajectory).__name__}"
+        )
+
+    if min_history < 1:
+        raise ValueError(f"min_history must be at least 1, got {min_history}")
+
+    user_id = candidate_trajectory.user_id
+    candidate_id = candidate_trajectory.trajectory_id
+    candidate_start_time = candidate_trajectory.points[0].timestamp
+
+    # Locate the boundary where start_timestamp >= candidate_start_time
+    idx = bisect_left(
+        user_trajectories,
+        candidate_start_time,
+        key=lambda t: t.points[0].timestamp,
+    )
+
+    # Prefix consists solely of trajectories where start_timestamp < candidate_start_time
+    prefix = user_trajectories[:idx]
+
+    # Filter out candidate_id if present (and defensively ensure same user)
+    eligible = [
+        t for t in prefix
+        if t.trajectory_id != candidate_id and t.user_id == user_id
+    ]
 
     is_sufficient = len(eligible) >= min_history
     status = STATUS_SUFFICIENT if is_sufficient else STATUS_INSUFFICIENT_HISTORY

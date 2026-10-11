@@ -20,6 +20,7 @@ from ai.route_deviation.reference import (  # noqa: E402
     MIN_HISTORICAL_TRAJECTORIES,
     STATUS_INSUFFICIENT_HISTORY,
     build_reference_set,
+    build_reference_set_from_sorted,
 )
 from ai.route_deviation.scoring import (  # noqa: E402
     RouteDeviationResult,
@@ -129,11 +130,11 @@ def evaluate_candidates(
         elif split == "test":
             test_candidates += 1
 
-        # Search only this user's trajectories.
-        # build_reference_set still enforces strict temporal precedence,
+        # Search only this user's sorted trajectories using binary search.
+        # build_reference_set_from_sorted still enforces strict temporal precedence,
         # excludes the candidate, and returns chronological references.
-        ref_result = build_reference_set(
-            trajectories=trajectories_by_user[candidate.user_id],
+        ref_result = build_reference_set_from_sorted(
+            user_trajectories=trajectories_by_user[candidate.user_id],
             candidate_trajectory=candidate,
             min_history=k_min,
         )
