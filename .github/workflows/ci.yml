@@ -37,6 +37,15 @@ jobs:
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
 
-      - name: Run unit test suite
+      - name: Run root test suite
+        env:
+          DATABASE_URL: sqlite://
         run: |
           python -m pytest tests/ -v
+
+      - name: Run backend test suite
+        env:
+          DATABASE_URL: sqlite://
+          JWT_SECRET_KEY: ci-test-secret-key-not-for-production
+        run: |
+          python -m pytest backend/tests/ -v

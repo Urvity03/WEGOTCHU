@@ -24,6 +24,13 @@ opencv-python-headless>=4.9.0.80,<5.0.0.0
 fastapi>=0.110.0,<0.112.0
 uvicorn[standard]>=0.28.0,<0.30.0
 httpx>=0.27.0,<0.28.0
+PyJWT>=2.8.0,<3.0.0
+pwdlib[argon2]>=0.2.0,<1.0.0
+
+# Database & Persistence
+sqlalchemy>=2.0.0,<3.0.0
+psycopg[binary]>=3.1.0,<4.0.0
+alembic>=1.13.0,<2.0.0
 
 # Testing & Code Quality
 pytest>=8.1.0,<9.0.0

@@ -1,10 +1,22 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
 
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use {
+        localProperties.load(it)
+    }
+}
+
 android {
     namespace = "com.wegotchu.app"
+
     compileSdk {
         version = release(37)
     }
@@ -17,6 +29,24 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+              buildConfigField(
+            "String",
+            "TELEMETRY_BASE_URL",
+            "\"${localProperties.getProperty("TELEMETRY_BASE_URL", "")}\""
+        )
+
+               buildConfigField(
+            "String",
+            "TELEMETRY_JWT",
+            "\"${localProperties.getProperty("TELEMETRY_JWT", "")}\""
+        )
+
+              buildConfigField(
+            "String",
+            "TELEMETRY_DEVICE_ID",
+            "\"${localProperties.getProperty("TELEMETRY_DEVICE_ID", "")}\""
+        )
     }
 
     buildTypes {
@@ -26,12 +56,15 @@ android {
             }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -44,11 +77,19 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+
     testImplementation(libs.junit)
+
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
