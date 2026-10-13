@@ -68,13 +68,16 @@ def compute_dtw_accumulated_cost_matrix(
 
 def _compute_dtw_final_cost(cost_matrix: np.ndarray) -> float:
     """
-    Compute the final DTW cost using two rolling rows.
+    Compute the final DTW cost using a single rolling row buffer.
 
-    The recurrence is identical to the complete-matrix implementation,
-    but only the previous and current rows are retained.
+    The recurrence is identical to the complete-matrix implementation:
+        D(0, 0) = cost(0, 0)
+        D(i, 0) = D(i - 1, 0) + cost(i, 0)
+        D(0, j) = D(0, j - 1) + cost(0, j)
+        D(i, j) = cost(i, j) + min(D(i - 1, j), D(i, j - 1), D(i - 1, j - 1))
 
-    DP memory usage is O(N), rather than O(M * N).
-    The supplied pairwise cost matrix is still stored in full.
+    Memory usage is O(N) using a single 1D array of length N, with local
+    scalar variables tracking diagonal, upper, and left values.
     """
     m, n = cost_matrix.shape
 
@@ -83,29 +86,33 @@ def _compute_dtw_final_cost(cost_matrix: np.ndarray) -> float:
             "Cannot compute accumulated cost for an empty cost matrix."
         )
 
-    previous_row = np.empty(n, dtype=np.float64)
-    current_row = np.empty(n, dtype=np.float64)
+    dp = np.empty(n, dtype=np.float64)
 
-    # Initialize the first row.
-    previous_row[0] = cost_matrix[0, 0]
-
+    # Initialize the first row: D(0, j) = D(0, j - 1) + cost(0, j)
+    row0 = cost_matrix[0]
+    dp[0] = row0[0]
     for j in range(1, n):
-        previous_row[j] = previous_row[j - 1] + cost_matrix[0, j]
+        dp[j] = dp[j - 1] + row0[j]
 
-    # Calculate subsequent rows using the same DTW recurrence.
+    # Calculate subsequent rows i = 1 .. m - 1
     for i in range(1, m):
-        current_row[0] = previous_row[0] + cost_matrix[i, 0]
+        cost_row = cost_matrix[i]
+        diag = dp[0]
+        left = diag + cost_row[0]
+        dp[0] = left
 
         for j in range(1, n):
-            current_row[j] = cost_matrix[i, j] + min(
-                previous_row[j],
-                current_row[j - 1],
-                previous_row[j - 1],
-            )
+            up = dp[j]
+            # min(up, left, diag)
+            min_prev = up if up < left else left
+            if diag < min_prev:
+                min_prev = diag
 
-        previous_row, current_row = current_row, previous_row
+            left = cost_row[j] + min_prev
+            diag = up
+            dp[j] = left
 
-    return float(previous_row[n - 1])
+    return float(dp[n - 1])
 
 
 def dtw_distance(

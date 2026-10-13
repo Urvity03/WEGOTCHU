@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 import pytest
 
 from ai.route_deviation.distance import haversine_distance
-from ai.route_deviation.dtw import compute_dtw_accumulated_cost_matrix, dtw_distance
+from ai.route_deviation.dtw import (
+    _compute_dtw_final_cost,
+    compute_dtw_accumulated_cost_matrix,
+    dtw_distance,
+)
 from ai.route_deviation.loader import Trajectory, TrajectoryPoint
 
 
@@ -204,3 +208,65 @@ def test_empty_trajectory_raises_value_error():
 
     with pytest.raises(ValueError, match="empty"):
         dtw_distance(pts, [])
+
+
+def test_compute_dtw_final_cost_empty_raises():
+    """Verify that an empty cost matrix raises ValueError."""
+    import numpy as np
+
+    with pytest.raises(ValueError, match="empty"):
+        _compute_dtw_final_cost(np.empty((0, 5), dtype=np.float64))
+
+    with pytest.raises(ValueError, match="empty"):
+        _compute_dtw_final_cost(np.empty((5, 0), dtype=np.float64))
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1),
+        (1, 10),
+        (10, 1),
+        (2, 3),
+        (3, 2),
+        (15, 15),
+        (20, 35),
+        (35, 20),
+    ],
+)
+def test_compute_dtw_final_cost_matches_accumulated_matrix_random(shape):
+    """Verify exact equivalence against compute_dtw_accumulated_cost_matrix on random nonnegative matrices."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed=42 + shape[0] * 100 + shape[1])
+    cost_matrix = rng.uniform(0.0, 1000.0, size=shape).astype(np.float64)
+
+    expected = compute_dtw_accumulated_cost_matrix(cost_matrix)[-1, -1]
+    actual = _compute_dtw_final_cost(cost_matrix)
+
+    assert actual == expected
+
+
+def test_compute_dtw_final_cost_zero_costs():
+    """Verify exact equivalence when all costs are zero."""
+    import numpy as np
+
+    for shape in [(1, 1), (1, 5), (5, 1), (10, 10), (12, 17)]:
+        cost_matrix = np.zeros(shape, dtype=np.float64)
+        expected = compute_dtw_accumulated_cost_matrix(cost_matrix)[-1, -1]
+        actual = _compute_dtw_final_cost(cost_matrix)
+
+        assert actual == 0.0
+        assert actual == expected
+
+
+def test_compute_dtw_final_cost_repeated_equal_costs():
+    """Verify exact equivalence when all entries have the same constant positive cost."""
+    import numpy as np
+
+    for shape in [(1, 1), (1, 6), (6, 1), (8, 8), (7, 13)]:
+        cost_matrix = np.full(shape, 42.5, dtype=np.float64)
+        expected = compute_dtw_accumulated_cost_matrix(cost_matrix)[-1, -1]
+        actual = _compute_dtw_final_cost(cost_matrix)
+
+        assert actual == expected
