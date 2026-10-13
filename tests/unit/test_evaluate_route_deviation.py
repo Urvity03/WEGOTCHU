@@ -261,12 +261,18 @@ def test_evaluate_candidates_supplies_sorted_trajectories_to_fast_path(monkeypat
     captured_inputs = []
     original_fn = eval_mod.build_reference_set_from_sorted
 
-    def mock_build_reference_set_from_sorted(user_trajectories, candidate_trajectory, min_history=5):
+    def mock_build_reference_set_from_sorted(
+        user_trajectories, candidate_trajectory, min_history=5
+    ):
         # Record the exact user_trajectories argument passed by evaluate_candidates
         captured_inputs.append((list(user_trajectories), candidate_trajectory))
         return original_fn(user_trajectories, candidate_trajectory, min_history)
 
-    monkeypatch.setattr(eval_mod, "build_reference_set_from_sorted", mock_build_reference_set_from_sorted)
+    monkeypatch.setattr(
+        eval_mod,
+        "build_reference_set_from_sorted",
+        mock_build_reference_set_from_sorted,
+    )
 
     results, summary = evaluate_candidates(scrambled_trajectories, manifest, k_min=5)
 
@@ -277,7 +283,9 @@ def test_evaluate_candidates_supplies_sorted_trajectories_to_fast_path(monkeypat
     assert all(t.user_id == user_id for t in passed_user_trajs)
 
     # Verify strictly sorted by (points[0].timestamp, trajectory_id)
-    timestamps_and_ids = [(t.points[0].timestamp, t.trajectory_id) for t in passed_user_trajs]
+    timestamps_and_ids = [
+        (t.points[0].timestamp, t.trajectory_id) for t in passed_user_trajs
+    ]
     assert timestamps_and_ids == sorted(timestamps_and_ids)
 
     # Verify the candidate was successfully scored with all 5 historical references

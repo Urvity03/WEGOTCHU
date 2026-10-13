@@ -46,14 +46,10 @@ def compute_dtw_accumulated_cost_matrix(
     accumulated_cost[0, 0] = cost_matrix[0, 0]
 
     for i in range(1, m):
-        accumulated_cost[i, 0] = (
-            accumulated_cost[i - 1, 0] + cost_matrix[i, 0]
-        )
+        accumulated_cost[i, 0] = accumulated_cost[i - 1, 0] + cost_matrix[i, 0]
 
     for j in range(1, n):
-        accumulated_cost[0, j] = (
-            accumulated_cost[0, j - 1] + cost_matrix[0, j]
-        )
+        accumulated_cost[0, j] = accumulated_cost[0, j - 1] + cost_matrix[0, j]
 
     for i in range(1, m):
         for j in range(1, n):
@@ -82,9 +78,7 @@ def _compute_dtw_final_cost(cost_matrix: np.ndarray) -> float:
     m, n = cost_matrix.shape
 
     if m == 0 or n == 0:
-        raise ValueError(
-            "Cannot compute accumulated cost for an empty cost matrix."
-        )
+        raise ValueError("Cannot compute accumulated cost for an empty cost matrix.")
 
     dp = np.empty(n, dtype=np.float64)
 

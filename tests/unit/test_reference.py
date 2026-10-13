@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 
 import pytest
@@ -33,8 +32,7 @@ def test_same_user_historical_trajectories_selected():
     candidate = _make_traj("user_1", "cand", start_sec=1000)
 
     history = [
-        _make_traj("user_1", f"hist_{i}", start_sec=100 * (i + 1))
-        for i in range(5)
+        _make_traj("user_1", f"hist_{i}", start_sec=100 * (i + 1)) for i in range(5)
     ]
 
     result = build_reference_set(history, candidate)
@@ -53,12 +51,10 @@ def test_other_users_are_excluded():
     candidate = _make_traj("user_1", "cand", start_sec=1000)
 
     history_u1 = [
-        _make_traj("user_1", f"u1_hist_{i}", start_sec=100 * (i + 1))
-        for i in range(4)
+        _make_traj("user_1", f"u1_hist_{i}", start_sec=100 * (i + 1)) for i in range(4)
     ]
     history_u2 = [
-        _make_traj("user_2", f"u2_hist_{i}", start_sec=100 * (i + 1))
-        for i in range(5)
+        _make_traj("user_2", f"u2_hist_{i}", start_sec=100 * (i + 1)) for i in range(5)
     ]
 
     result = build_reference_set(history_u1 + history_u2, candidate)
@@ -74,12 +70,10 @@ def test_future_trajectories_are_excluded():
     candidate = _make_traj("user_1", "cand", start_sec=1000)
 
     past = [
-        _make_traj("user_1", f"past_{i}", start_sec=700 + i * 100)
-        for i in range(3)
+        _make_traj("user_1", f"past_{i}", start_sec=700 + i * 100) for i in range(3)
     ]
     future = [
-        _make_traj("user_1", f"future_{i}", start_sec=1100 + i * 100)
-        for i in range(3)
+        _make_traj("user_1", f"future_{i}", start_sec=1100 + i * 100) for i in range(3)
     ]
 
     result = build_reference_set(past + future, candidate)
@@ -93,8 +87,7 @@ def test_candidate_trajectory_is_excluded():
     """Verify that the candidate is never included in its own reference set."""
     candidate = _make_traj("user_1", "cand", start_sec=1000)
     history = [
-        _make_traj("user_1", f"hist_{i}", start_sec=100 * (i + 1))
-        for i in range(5)
+        _make_traj("user_1", f"hist_{i}", start_sec=100 * (i + 1)) for i in range(5)
     ]
 
     result = build_reference_set(history + [candidate], candidate)
@@ -107,8 +100,7 @@ def test_exactly_five_historical_trajectories_is_sufficient():
     """Verify the boundary where five historical trajectories are sufficient."""
     candidate = _make_traj("user_1", "cand", start_sec=1000)
     history = [
-        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1))
-        for i in range(5)
+        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1)) for i in range(5)
     ]
 
     result = build_reference_set(history, candidate, min_history=5)
@@ -122,8 +114,7 @@ def test_fewer_than_five_historical_trajectories_is_insufficient():
     """Verify that fewer than five historical trajectories are insufficient."""
     candidate = _make_traj("user_1", "cand", start_sec=1000)
     history = [
-        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1))
-        for i in range(4)
+        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1)) for i in range(4)
     ]
 
     result = build_reference_set(history, candidate, min_history=5)
@@ -145,8 +136,7 @@ def test_same_start_timestamp_is_excluded():
     concurrent = _make_traj("user_1", "concurrent", start_sec=1000)
 
     earlier = [
-        _make_traj("user_1", f"early_{i}", start_sec=600 + i * 100)
-        for i in range(4)
+        _make_traj("user_1", f"early_{i}", start_sec=600 + i * 100) for i in range(4)
     ]
 
     result = build_reference_set(earlier + [concurrent], candidate)
@@ -218,8 +208,7 @@ def test_multiple_trajectories_with_same_start_time_are_excluded():
     candidate = _make_traj("user_1", "candidate", start_sec=1000)
 
     earlier = [
-        _make_traj("user_1", f"early_{i}", start_sec=100 + i * 100)
-        for i in range(5)
+        _make_traj("user_1", f"early_{i}", start_sec=100 + i * 100) for i in range(5)
     ]
     concurrent = [
         _make_traj("user_1", "concurrent_a", start_sec=1000),
@@ -232,9 +221,7 @@ def test_multiple_trajectories_with_same_start_time_are_excluded():
         candidate,
     )
 
-    assert [t.trajectory_id for t in result] == [
-        f"early_{i}" for i in range(5)
-    ]
+    assert [t.trajectory_id for t in result] == [f"early_{i}" for i in range(5)]
     assert result.is_sufficient is True
 
 
@@ -281,15 +268,19 @@ def test_sorted_equivalence_with_build_reference_set():
     )
 
     baseline_res = build_reference_set(sorted_trajectories, candidate, min_history=5)
-    fast_res = build_reference_set_from_sorted(sorted_trajectories, candidate, min_history=5)
+    fast_res = build_reference_set_from_sorted(
+        sorted_trajectories, candidate, min_history=5
+    )
 
     assert fast_res.user_id == baseline_res.user_id == "user_1"
     assert fast_res.candidate_id == baseline_res.candidate_id == "cand"
     assert fast_res.is_sufficient == baseline_res.is_sufficient is True
     assert fast_res.status == baseline_res.status == STATUS_SUFFICIENT
-    assert [t.trajectory_id for t in fast_res] == [t.trajectory_id for t in baseline_res] == [
-        "hist_1", "hist_2", "hist_3", "hist_4", "hist_5"
-    ]
+    assert (
+        [t.trajectory_id for t in fast_res]
+        == [t.trajectory_id for t in baseline_res]
+        == ["hist_1", "hist_2", "hist_3", "hist_4", "hist_5"]
+    )
 
 
 def test_sorted_strict_exclusion_of_equal_time_and_future():
@@ -367,10 +358,11 @@ def test_sorted_empty_and_insufficient_history():
 
     # 4 historical (insufficient for min_history=5)
     sorted_4 = [
-        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1))
-        for i in range(4)
+        _make_traj("user_1", f"h_{i}", start_sec=100 * (i + 1)) for i in range(4)
     ]
-    insufficient_res = build_reference_set_from_sorted(sorted_4, candidate, min_history=5)
+    insufficient_res = build_reference_set_from_sorted(
+        sorted_4, candidate, min_history=5
+    )
     assert len(insufficient_res) == 4
     assert insufficient_res.is_sufficient is False
     assert insufficient_res.status == STATUS_INSUFFICIENT_HISTORY
@@ -420,4 +412,6 @@ def test_sorted_equivalence_across_candidate_positions():
         assert res_fast.candidate_id == res_baseline.candidate_id
         assert res_fast.is_sufficient == res_baseline.is_sufficient
         assert res_fast.status == res_baseline.status
-        assert [t.trajectory_id for t in res_fast] == [t.trajectory_id for t in res_baseline]
+        assert [t.trajectory_id for t in res_fast] == [
+            t.trajectory_id for t in res_baseline
+        ]

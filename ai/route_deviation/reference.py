@@ -170,8 +170,7 @@ def build_reference_set_from_sorted(
 
     # Filter out candidate_id if present (and defensively ensure same user)
     eligible = [
-        t for t in prefix
-        if t.trajectory_id != candidate_id and t.user_id == user_id
+        t for t in prefix if t.trajectory_id != candidate_id and t.user_id == user_id
     ]
 
     is_sufficient = len(eligible) >= min_history
