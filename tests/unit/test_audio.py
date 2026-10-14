@@ -146,6 +146,7 @@ def test_run_audio_inference_rejects_short_audio(tmp_path):
     with pytest.raises(ValueError, match="too short"):
         run_audio_inference(audio_path)
 
+
 def test_extract_mfcc_rejects_invalid_sample_rate():
     audio = np.zeros(16000, dtype=np.float32)
 
@@ -180,6 +181,7 @@ def test_aggregate_mfcc_rejects_non_finite_values():
 
     with pytest.raises(ValueError, match="NaN or Inf"):
         aggregate_mfcc(mfcc)
+
 
 def test_predict_score_returns_zero_for_silence():
     model = AudioBaselineModel()
