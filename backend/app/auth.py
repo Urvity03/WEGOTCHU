@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-load_dotenv("backend/.env")
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
