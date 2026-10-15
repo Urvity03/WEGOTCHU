@@ -145,3 +145,72 @@ def test_run_audio_inference_rejects_short_audio(tmp_path):
 
     with pytest.raises(ValueError, match="too short"):
         run_audio_inference(audio_path)
+
+
+def test_extract_mfcc_rejects_invalid_sample_rate():
+    audio = np.zeros(16000, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="Sample rate"):
+        extract_mfcc(audio, sample_rate=0)
+
+
+def test_extract_mfcc_rejects_invalid_dimensions():
+    audio = np.zeros((2, 16000), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        extract_mfcc(audio, sample_rate=16000)
+
+
+def test_extract_mfcc_rejects_non_finite_audio():
+    audio = np.array([0.0, np.nan, 1.0], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        extract_mfcc(audio, sample_rate=16000)
+
+
+def test_aggregate_mfcc_rejects_invalid_dimensions():
+    mfcc = np.zeros(40, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="two-dimensional"):
+        aggregate_mfcc(mfcc)
+
+
+def test_aggregate_mfcc_rejects_non_finite_values():
+    mfcc = np.zeros((40, 10), dtype=np.float32)
+    mfcc[0, 0] = np.inf
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        aggregate_mfcc(mfcc)
+
+
+def test_predict_score_returns_zero_for_silence():
+    model = AudioBaselineModel()
+    audio = np.zeros(16000, dtype=np.float32)
+    features = np.zeros(80, dtype=np.float32)
+
+    result = model.predict_score(audio, features)
+
+    assert result.audio_distress_score == 0.0
+    assert result.detected_class == "ambient"
+    assert 0.0 <= result.confidence <= 1.0
+
+
+def test_predict_score_is_bounded_for_high_amplitude_audio():
+    model = AudioBaselineModel()
+    audio = np.full(16000, 100.0, dtype=np.float32)
+    features = np.zeros(80, dtype=np.float32)
+
+    result = model.predict_score(audio, features)
+
+    assert 0.0 <= result.audio_distress_score <= 1.0
+    assert result.audio_distress_score > 0.9
+    assert result.detected_class == "acoustic_activity"
+
+
+def test_predict_score_rejects_multichannel_audio():
+    model = AudioBaselineModel()
+    audio = np.zeros((2, 16000), dtype=np.float32)
+    features = np.zeros(80, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        model.predict_score(audio, features)
