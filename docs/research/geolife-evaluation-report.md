@@ -1,5 +1,4 @@
 
-
 # GeoLife Route-Deviation Evaluation Report Template
 
 ## Purpose
