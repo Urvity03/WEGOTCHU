@@ -1,9 +1,14 @@
-# GeoLife Route-Deviation Evaluation Report
+
+
+# GeoLife Route-Deviation Evaluation Report Template
 
 ## Purpose
 
-This report evaluates the personalized route-deviation baseline using the
-chronological GeoLife split manifest.
+This document is a template for recording the results of the personalized
+route-deviation evaluation on the GeoLife dataset.
+
+The methodology and evaluation configuration are defined now. The numerical
+results will be added after the large-dataset evaluation completes.
 
 ## Configuration
 
@@ -53,3 +58,18 @@ trajectories. It is not a probability of danger or manipulation.
 - Results represent a proof of concept on historical mobility data.
 - Full evaluation is currently pending because the large processed dataset
   requires loader-performance optimization.
+
+
+## Raw Evaluation Metrics
+
+The following values will be populated after the evaluator completes:
+
+| Metric | Validation | Test |
+|---|---:|---:|
+| Candidate trajectories | Pending | Pending |
+| Successfully scored | Pending | Pending |
+| Skipped candidates | Pending | Pending |
+| Mean raw DTW distance | Pending | Pending |
+| Median raw DTW distance | Pending | Pending |
+| Minimum raw DTW distance | Pending | Pending |
+| Maximum raw DTW distance | Pending | Pending |
