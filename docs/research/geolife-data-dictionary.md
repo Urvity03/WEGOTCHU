@@ -31,7 +31,12 @@ Raw and processed datasets are ignored by Git and must not be committed.
 | `accuracy_meters` | float or null | GPS accuracy in metres. GeoLife does not provide this field, so it remains null. |
 | `gap_seconds` | float | Number of seconds since the previous observation in the same trajectory. The first observation has a value of `0`. |
 | `is_gap_over_threshold` | boolean | Indicates whether the time gap exceeds the configured threshold. The provisional default threshold is 60 seconds. |
-| `split` | string | Chronological evaluation assignment: `reference`, `validation`, `test`, or `cold_start`. This field is present in the split manifest. |
+
+The `split` field is stored in the separate chronological split manifest, not in the processed trajectory CSV.
+
+| Field | Type | Description |
+|---|---|---|
+| `split` | string | Chronological evaluation assignment: `reference`, `validation`, `test`, or `cold_start`. |
 
 ## Source Fields
 
@@ -47,7 +52,7 @@ date
 time
 ```
 
-The preprocessing pipeline creates the following additional fields:
+The preprocessing pipeline creates the following processed-output fields:
 
 ```text
 user_id
@@ -114,19 +119,28 @@ Segmentation must not change:
 
 ## Split Assignments
 
-The chronological split manifest uses the following policy for users with at least five trajectories:
+The chronological split manifest uses the following policy for users with at least five original trajectories:
 
 - Earliest 60%: `reference`
 - Next 20%: `validation`
 - Remaining 20%: `test`
 
-Users with fewer than five trajectories are assigned to:
+Users with fewer than five original trajectories are assigned to:
 
 ```text
 cold_start
 ```
 
 Trajectories are sorted by their start timestamp before assignment. Validation and test trajectories must occur later than the reference trajectories for the same user.
+
+Split assignments are stored in the separate chronological split manifest. They are joined to processed trajectories using:
+
+```text
+user_id
+trajectory_id
+```
+
+Trajectory counts are calculated before gap-based segmentation. Child segments inherit the split of their original parent trajectory.
 
 ## Route-Deviation Baseline Fields
 
