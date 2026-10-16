@@ -1,4 +1,3 @@
-
 import csv
 import json
 from pathlib import Path
@@ -36,9 +35,7 @@ def test_evaluate_manifest_success(tmp_path, monkeypatch):
         manifest,
         [{"sample_id": "sample-001", "audio_path": "sample.wav"}],
     )
-    monkeypatch.setattr(
-        evaluate_audio, "run_audio_inference", fake_prediction
-    )
+    monkeypatch.setattr(evaluate_audio, "run_audio_inference", fake_prediction)
 
     report = evaluate_audio.evaluate_manifest(manifest, output)
 
@@ -95,9 +92,7 @@ def test_inference_failure_is_recorded(tmp_path, monkeypatch):
     def failing_prediction(audio_path):
         raise FileNotFoundError("Audio file not found")
 
-    monkeypatch.setattr(
-        evaluate_audio, "run_audio_inference", failing_prediction
-    )
+    monkeypatch.setattr(evaluate_audio, "run_audio_inference", failing_prediction)
 
     report = evaluate_audio.evaluate_manifest(manifest, output)
 

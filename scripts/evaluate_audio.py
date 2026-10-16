@@ -1,4 +1,3 @@
-
 """Evaluation harness for the WEGOTCHU audio perception baseline."""
 
 from __future__ import annotations
@@ -44,9 +43,7 @@ def evaluate_manifest(
         reader = csv.DictReader(handle)
 
         if not reader.fieldnames or "audio_path" not in reader.fieldnames:
-            raise ValueError(
-                "CSV manifest must contain an 'audio_path' column."
-            )
+            raise ValueError("CSV manifest must contain an 'audio_path' column.")
 
         for row_number, row in enumerate(reader, start=2):
             raw_path = (row.get("audio_path") or "").strip()
@@ -54,11 +51,13 @@ def evaluate_manifest(
 
             if not raw_path:
                 failures += 1
-                results.append({
-                    "sample_id": sample_id,
-                    "status": "error",
-                    "error": "Missing audio_path.",
-                })
+                results.append(
+                    {
+                        "sample_id": sample_id,
+                        "status": "error",
+                        "error": "Missing audio_path.",
+                    }
+                )
                 continue
 
             audio_path = Path(raw_path)
@@ -73,35 +72,36 @@ def evaluate_manifest(
 
                 if not math.isfinite(score) or not 0.0 <= score <= 1.0:
                     raise ValueError("Inference returned an invalid score.")
-                if (
-                    not math.isfinite(confidence)
-                    or not 0.0 <= confidence <= 1.0
-                ):
+                if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
                     raise ValueError("Inference returned invalid confidence.")
 
                 scores.append(score)
                 confidences.append(confidence)
                 classes[prediction["detected_class"]] += 1
 
-                results.append({
-                    "sample_id": sample_id,
-                    "status": "success",
-                    "audio_distress_score": score,
-                    "confidence": confidence,
-                    "detected_class": prediction["detected_class"],
-                    "window_duration_seconds": prediction[
-                        "window_duration_seconds"
-                    ],
-                    "timestamp": prediction["timestamp"],
-                    "model_version": prediction["model_version"],
-                })
+                results.append(
+                    {
+                        "sample_id": sample_id,
+                        "status": "success",
+                        "audio_distress_score": score,
+                        "confidence": confidence,
+                        "detected_class": prediction["detected_class"],
+                        "window_duration_seconds": prediction[
+                            "window_duration_seconds"
+                        ],
+                        "timestamp": prediction["timestamp"],
+                        "model_version": prediction["model_version"],
+                    }
+                )
             except Exception as exc:
                 failures += 1
-                results.append({
-                    "sample_id": sample_id,
-                    "status": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                results.append(
+                    {
+                        "sample_id": sample_id,
+                        "status": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
 
     if not results:
         raise ValueError("Manifest contains no audio samples to evaluate.")
@@ -112,9 +112,7 @@ def evaluate_manifest(
         "evaluation_type": "audio_acoustic_activity_baseline",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model_version": (
-            results[0].get("model_version", "unknown")
-            if successful
-            else "unknown"
+            results[0].get("model_version", "unknown") if successful else "unknown"
         ),
         "interpretation": (
             "The score represents waveform acoustic activity. "
@@ -132,9 +130,7 @@ def evaluate_manifest(
             "mean_acoustic_activity_score": mean(scores) if scores else None,
             "min_acoustic_activity_score": min(scores) if scores else None,
             "max_acoustic_activity_score": max(scores) if scores else None,
-            "mean_confidence_heuristic": (
-                mean(confidences) if confidences else None
-            ),
+            "mean_confidence_heuristic": (mean(confidences) if confidences else None),
             "detected_class_counts": dict(classes),
         },
         "results": results,
