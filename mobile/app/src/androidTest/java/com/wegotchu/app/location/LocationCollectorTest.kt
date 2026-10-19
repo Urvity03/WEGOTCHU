@@ -8,21 +8,47 @@ class LocationCollectorTest {
 
     @Test
     fun coarseOnlyPermissionDoesNotAllowGps() {
-        val fineLocationGranted = false
-
-        val shouldUseGps =
-            LocationCollector.shouldUseGps(fineLocationGranted)
-
-        assertFalse(shouldUseGps)
+        assertFalse(LocationCollector.shouldUseGps(false))
     }
 
     @Test
     fun fineLocationPermissionAllowsGps() {
-        val fineLocationGranted = true
+        assertTrue(LocationCollector.shouldUseGps(true))
+    }
 
-        val shouldUseGps =
-            LocationCollector.shouldUseGps(fineLocationGranted)
+    @Test
+    fun newerLocationWithBetterAccuracyIsAccepted() {
+        assertTrue(
+            LocationCollector.shouldReplaceCurrentLocation(
+                currentTimestampMillis = 1000L,
+                currentAccuracyMeters = 20f,
+                newTimestampMillis = 2000L,
+                newAccuracyMeters = 10f
+            )
+        )
+    }
 
-        assertTrue(shouldUseGps)
+    @Test
+    fun olderLocationIsRejected() {
+        assertFalse(
+            LocationCollector.shouldReplaceCurrentLocation(
+                currentTimestampMillis = 2000L,
+                currentAccuracyMeters = 20f,
+                newTimestampMillis = 1000L,
+                newAccuracyMeters = 10f
+            )
+        )
+    }
+
+    @Test
+    fun newerButLessAccurateLocationIsRejected() {
+        assertFalse(
+            LocationCollector.shouldReplaceCurrentLocation(
+                currentTimestampMillis = 1000L,
+                currentAccuracyMeters = 10f,
+                newTimestampMillis = 2000L,
+                newAccuracyMeters = 20f
+            )
+        )
     }
 }
