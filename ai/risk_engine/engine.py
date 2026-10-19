@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from ai.anomaly_detection.motion import MotionAnomalyResult
@@ -181,8 +182,18 @@ class RiskEngine:
             # IMPORTANT: Statistical anomaly scores alone NEVER trigger HIGH or EMERGENCY.
             risk_level = RiskLevel.ELEVATED
             action = RecommendedAction.USER_CHECK
-            motion_conf = motion_result.confidence if motion_result else 0.8
-            confidence = min(0.95, max(0.70, (0.85 + motion_conf) / 2.0))
+            # Route deviation has no detector-level confidence field; assume a nominal
+            # baseline weight of 0.85 when a validated route anomaly is observed.
+            # Incorporate motion detector confidence explicitly rather than clamping
+            # with an artificial 0.70 floor.
+            if motion_result is None or motion_result.confidence is None:
+                motion_conf = 0.80
+            elif not math.isfinite(motion_result.confidence):
+                motion_conf = 0.0
+            else:
+                motion_conf = float(max(0.0, min(1.0, motion_result.confidence)))
+
+            confidence = float(min(0.95, max(0.0, (0.85 + motion_conf) / 2.0)))
             raw_score = (route_score + motion_score) / 2.0
             calibrated_score = float(min(1.0, raw_score + 0.15))
 
@@ -192,7 +203,20 @@ class RiskEngine:
             risk_level = RiskLevel.UNUSUAL
             action = RecommendedAction.MONITOR
             active_score = route_score if is_route_anomalous else motion_score
-            confidence = 0.75
+            if is_motion_anomalous and not is_route_anomalous:
+                # When motion is the anomalous modality, scale confidence with motion detector confidence
+                if motion_result is None or motion_result.confidence is None:
+                    motion_conf = 0.75
+                elif not math.isfinite(motion_result.confidence):
+                    motion_conf = 0.0
+                else:
+                    motion_conf = float(max(0.0, min(1.0, motion_result.confidence)))
+
+                confidence = float(min(0.90, max(0.0, motion_conf)))
+            else:
+                # Route anomaly is active (either motion is normal or motion is unavailable).
+                # Route deviation does not provide a detector-level confidence; assign nominal 0.75.
+                confidence = 0.75
             raw_score = active_score
             calibrated_score = active_score
 

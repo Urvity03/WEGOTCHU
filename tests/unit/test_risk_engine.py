@@ -775,3 +775,215 @@ def test_risk_vector_scores_never_coerced_from_none():
     a3 = engine.evaluate("u", route_result=None, motion_result=None)
     assert a3.risk_vector.route_anomaly is None
     assert a3.risk_vector.kinematic_anomaly is None
+
+
+# ---------------------------------------------------------------------------
+# Section 5 — Targeted confidence policy tests (Reviewer Feedback Scenarios)
+# ---------------------------------------------------------------------------
+
+
+def test_single_motion_anomaly_high_vs_low_detector_confidence():
+    """
+    Verify single motion anomaly scaling with motion detector confidence:
+    - High motion detector confidence (0.85) yields high assessment confidence (0.85).
+    - Low motion detector confidence (0.25) lowers assessment confidence (0.25).
+    - Very low motion detector confidence (0.05) preserves 0.05 without an artificial 0.20 clamp.
+    All remain at UNUSUAL / MONITOR with identical signals and risk vectors.
+    """
+    engine = RiskEngine()
+    route_normal = _make_route_result(score=0.10)
+
+    motion_high = _make_motion_result(
+        score=0.80, confidence=0.85, motion_state="abrupt_motion"
+    )
+    a_high = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_high
+    )
+
+    assert a_high.risk_level == RiskLevel.UNUSUAL
+    assert a_high.recommended_action == RecommendedAction.MONITOR
+    assert a_high.signals == (SIGNAL_UNUSUAL_MOTION,)
+    assert a_high.confidence == 0.85
+    assert a_high.risk_vector.kinematic_anomaly == 0.80
+    assert a_high.risk_vector.route_anomaly == 0.10
+
+    motion_low = _make_motion_result(
+        score=0.80, confidence=0.25, motion_state="abrupt_motion"
+    )
+    a_low = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_low
+    )
+
+    assert a_low.risk_level == RiskLevel.UNUSUAL
+    assert a_low.recommended_action == RecommendedAction.MONITOR
+    assert a_low.signals == (SIGNAL_UNUSUAL_MOTION,)
+    assert a_low.confidence == 0.25
+    assert a_low.confidence < a_high.confidence
+    assert a_low.risk_vector.kinematic_anomaly == 0.80
+    assert a_low.risk_vector.route_anomaly == 0.10
+
+    motion_very_low = _make_motion_result(
+        score=0.80, confidence=0.05, motion_state="abrupt_motion"
+    )
+    a_very_low = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_very_low
+    )
+
+    assert a_very_low.risk_level == RiskLevel.UNUSUAL
+    assert a_very_low.recommended_action == RecommendedAction.MONITOR
+    assert a_very_low.signals == (SIGNAL_UNUSUAL_MOTION,)
+    assert a_very_low.confidence == 0.05
+    assert a_very_low.confidence < 0.20
+    assert a_very_low.risk_vector.kinematic_anomaly == 0.80
+    assert a_very_low.risk_vector.route_anomaly == 0.10
+
+
+def test_co_occurring_anomalies_high_vs_low_motion_confidence():
+    """
+    Verify co-occurring anomalies without an artificial 0.70 confidence floor:
+    - High motion confidence (0.90) yields (0.85 + 0.90) / 2 = 0.875 confidence.
+    - Low motion confidence (0.20) yields (0.85 + 0.20) / 2 = 0.525 confidence.
+      The confidence is strictly lower than 0.70 and reflects the detector uncertainty.
+    Both escalate to ELEVATED / USER_CHECK with identical active signals and risk vectors.
+    """
+    engine = RiskEngine()
+    route_anom = _make_route_result(score=0.85)
+
+    motion_high = _make_motion_result(
+        score=0.80, confidence=0.90, motion_state="abrupt_motion"
+    )
+    a_high = engine.evaluate(
+        "usr_test_001", route_result=route_anom, motion_result=motion_high
+    )
+
+    assert a_high.risk_level == RiskLevel.ELEVATED
+    assert a_high.recommended_action == RecommendedAction.USER_CHECK
+    assert set(a_high.signals) == {SIGNAL_ROUTE_DEVIATION, SIGNAL_UNUSUAL_MOTION}
+    assert a_high.confidence == 0.875
+    assert a_high.risk_vector.route_anomaly == 0.85
+    assert a_high.risk_vector.kinematic_anomaly == 0.80
+
+    motion_low = _make_motion_result(
+        score=0.80, confidence=0.20, motion_state="abrupt_motion"
+    )
+    a_low = engine.evaluate(
+        "usr_test_001", route_result=route_anom, motion_result=motion_low
+    )
+
+    assert a_low.risk_level == RiskLevel.ELEVATED
+    assert a_low.recommended_action == RecommendedAction.USER_CHECK
+    assert set(a_low.signals) == {SIGNAL_ROUTE_DEVIATION, SIGNAL_UNUSUAL_MOTION}
+    assert a_low.confidence == 0.525
+    assert (
+        a_low.confidence < 0.70
+    ), "Confidence must not be clamped by a 0.70 floor when motion confidence is low"
+    assert a_low.confidence < a_high.confidence
+    assert a_low.risk_vector.route_anomaly == 0.85
+    assert a_low.risk_vector.kinematic_anomaly == 0.80
+
+
+def test_single_route_anomaly_with_unavailable_motion_maintains_standard_confidence():
+    """
+    When route is anomalous and motion is unavailable (None), motion confidence does not exist.
+    Risk assessment confidence is 0.75 (nominal single-route anomaly confidence).
+    """
+    engine = RiskEngine()
+    route_anom = _make_route_result(score=0.75)
+
+    a = engine.evaluate("usr_test_001", route_result=route_anom, motion_result=None)
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.signals == (SIGNAL_ROUTE_DEVIATION,)
+    assert a.confidence == 0.75
+    assert a.risk_vector.route_anomaly == 0.75
+    assert a.risk_vector.kinematic_anomaly is None
+
+
+def test_motion_detector_confidence_out_of_bounds_clamped():
+    """
+    Detector confidence below 0.0 or above 1.0 is clamped to [0.0, 1.0].
+    - confidence = -0.5 is clamped to 0.0.
+    - confidence = 1.5 is clamped to 1.0 (single anomaly capped at 0.90; co-occurring (0.85+1.0)/2 = 0.925).
+    """
+    engine = RiskEngine()
+    route_normal = _make_route_result(score=0.10)
+    route_anom = _make_route_result(score=0.85)
+
+    # Negative confidence
+    motion_neg = _make_motion_result(
+        score=0.80, confidence=-0.5, motion_state="abrupt_motion"
+    )
+    a_neg_single = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_neg
+    )
+    assert a_neg_single.confidence == 0.0
+
+    a_neg_co = engine.evaluate(
+        "usr_test_001", route_result=route_anom, motion_result=motion_neg
+    )
+    assert a_neg_co.confidence == (0.85 + 0.0) / 2.0
+
+    # Over 1.0 confidence
+    motion_over = _make_motion_result(
+        score=0.80, confidence=1.5, motion_state="abrupt_motion"
+    )
+    a_over_single = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_over
+    )
+    assert a_over_single.confidence == 0.90  # capped at single-motion maximum
+
+    a_over_co = engine.evaluate(
+        "usr_test_001", route_result=route_anom, motion_result=motion_over
+    )
+    assert a_over_co.confidence == (0.85 + 1.0) / 2.0
+
+
+def test_motion_detector_confidence_non_finite_fallback_to_zero():
+    """
+    Non-finite detector confidence (NaN, +inf, -inf) falls back safely to 0.0.
+    Does not crash RiskAssessment construction or produce NaN/Inf.
+    """
+    engine = RiskEngine()
+    route_normal = _make_route_result(score=0.10)
+    route_anom = _make_route_result(score=0.85)
+
+    for non_finite_val in [float("nan"), float("inf"), float("-inf")]:
+        motion_nf = _make_motion_result(
+            score=0.80, confidence=non_finite_val, motion_state="abrupt_motion"
+        )
+        a_single = engine.evaluate(
+            "usr_test_001", route_result=route_normal, motion_result=motion_nf
+        )
+        assert a_single.risk_level == RiskLevel.UNUSUAL
+        assert a_single.confidence == 0.0
+
+        a_co = engine.evaluate(
+            "usr_test_001", route_result=route_anom, motion_result=motion_nf
+        )
+        assert a_co.risk_level == RiskLevel.ELEVATED
+        assert a_co.confidence == (0.85 + 0.0) / 2.0
+
+
+def test_motion_detector_none_confidence_fallback():
+    """
+    When motion_result.confidence is None, conservative nominal fallbacks apply:
+    - Single motion anomaly: 0.75
+    - Co-occurring anomalies: (0.85 + 0.80) / 2.0 = 0.825
+    """
+    engine = RiskEngine()
+    route_normal = _make_route_result(score=0.10)
+    route_anom = _make_route_result(score=0.85)
+
+    motion_none_conf = _make_motion_result(
+        score=0.80, confidence=None, motion_state="abrupt_motion"
+    )
+    a_single = engine.evaluate(
+        "usr_test_001", route_result=route_normal, motion_result=motion_none_conf
+    )
+    assert a_single.confidence == 0.75
+
+    a_co = engine.evaluate(
+        "usr_test_001", route_result=route_anom, motion_result=motion_none_conf
+    )
+    assert a_co.confidence == (0.85 + 0.80) / 2.0

@@ -32,6 +32,22 @@ The engine produces structured `RiskAssessment` payloads strictly complying with
   * `RiskAssessment`: Central immutable dataclass with `.to_dict()` for strict Contract 4 (10 mandatory fields) and `.to_dict(include_extended_metadata=True)` / `.to_architecture_dict()` for extended architecture representations.
 * **`ai/risk_engine/engine.py`**:
   * `RiskEngine`: Deterministic, rule-anchored risk engine integrating `RouteDeviationResult` and `MotionAnomalyResult`.
+  * **Confidence Assessment Policy:**
+    * **Distinction between Concepts:**
+      * *Anomaly Scores:* Bounded numerical values in `[0.0, 1.0]` indicating statistical divergence from an individual or kinematic baseline.
+      * *Detector Confidence:* Reliability indicator reflecting observation density, sampling frequency, or sensor validity (e.g., `MotionAnomalyResult.confidence`).
+      * *Risk-Assessment Confidence:* Overall certainty of the synthesized `RiskAssessment`.
+      * *Safety-Risk Probability:* A calibrated likelihood of genuine physical danger. **The risk engine outputs deterministic heuristic confidence scores, NOT calibrated probabilities of danger or crisis.**
+    * **Single Anomaly Confidence:**
+      * When kinematic motion is the sole anomalous signal, risk confidence scales directly with motion detector confidence: `confidence = min(0.90, max(0.0, motion_conf))`. Lower detector confidence directly lowers assessment certainty rather than being held artificially high or clamped by an artificial floor.
+      * When route deviation is the sole anomalous signal, route scoring does not currently provide a detector-level confidence metric (such as reference corridor density). The engine assigns a nominal baseline confidence of `0.75`.
+    * **Co-Occurring Anomaly Confidence:**
+      * When both route deviation and kinematic anomalies co-occur, confidence is synthesized as `(0.85 + motion_conf) / 2.0` (bounded in `[0.0, 0.95]`).
+      * There is no artificial minimum confidence floor (such as `0.70`). If motion detector confidence is low (e.g. `0.20`), risk confidence drops proportionally (`0.525`), preventing overstated certainty during multimodal escalation.
+    * **Handling of Detector Confidence Bounds and Missing Values:**
+      * Detector confidence values are clamped to `[0.0, 1.0]`.
+      * Non-finite confidence values (`NaN`, `+inf`, `-inf`) fall back safely to `0.0`.
+      * Unavailable confidence (`None`) preserves conservative nominal baseline values (`0.75` for single motion anomaly; `0.80` weight for co-occurring anomalies).
   * **Missing-Data & Cold-Start Policy:**
     * Validated-normal signal with a missing/cold-start counterpart evaluates to `NORMAL` with reduced confidence (`0.65`).
     * All signals missing evaluates conservatively to `UNUSUAL` / `MONITOR` with low confidence (`0.20`), ensuring absence of telemetry is never treated as confirmed safety.
@@ -40,4 +56,4 @@ The engine produces structured `RiskAssessment` payloads strictly complying with
 
 ## Testing & Validation
 * Unit test suite: `tests/unit/test_risk_engine.py`
-* Covers normal mobility, single-modality deviations, multimodal co-occurrence, cold-start handling, partial and all-missing telemetry policies, score bound invariants, and strict Contract 4 serialization.
+* Covers normal mobility, single-modality deviations, multimodal co-occurrence, high vs. low motion detector confidence scaling, cold-start handling, partial and all-missing telemetry policies, score bound invariants, and strict Contract 4 serialization.
