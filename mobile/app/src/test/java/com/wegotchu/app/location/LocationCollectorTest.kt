@@ -40,14 +40,36 @@ class LocationCollectorTest {
         )
     }
 
+
     @Test
-    fun newerButLessAccurateLocationIsRejected() {
-        assertFalse(
+    fun consecutiveNewerLocationsWithVaryingAccuracyAreAccepted() {
+        // First reading: 4 m accuracy.
+        assertTrue(
             LocationCollector.shouldReplaceCurrentLocation(
                 currentTimestampMillis = 1000L,
-                currentAccuracyMeters = 10f,
+                currentAccuracyMeters = 4f,
                 newTimestampMillis = 2000L,
-                newAccuracyMeters = 20f
+                newAccuracyMeters = 8f
+            )
+        )
+
+        // Next reading: accuracy improves to 5 m.
+        assertTrue(
+            LocationCollector.shouldReplaceCurrentLocation(
+                currentTimestampMillis = 2000L,
+                currentAccuracyMeters = 8f,
+                newTimestampMillis = 3000L,
+                newAccuracyMeters = 5f
+            )
+        )
+
+        // Next reading: accuracy fluctuates to 10 m.
+        assertTrue(
+            LocationCollector.shouldReplaceCurrentLocation(
+                currentTimestampMillis = 3000L,
+                currentAccuracyMeters = 5f,
+                newTimestampMillis = 4000L,
+                newAccuracyMeters = 10f
             )
         )
     }

@@ -1,4 +1,4 @@
-package com.wegotchu.app.location
+﻿package com.wegotchu.app.location
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -139,6 +139,7 @@ class LocationCollector(
             bearingDegrees = if (location.hasBearing()) location.bearing else null
         )
     }
+
     private fun shouldReplaceCurrentLocation(location: Location): Boolean =
         shouldReplaceCurrentLocation(
             currentTimestampMillis = latestLocation?.timestampMillis,
@@ -157,14 +158,17 @@ class LocationCollector(
             newTimestampMillis: Long,
             newAccuracyMeters: Float
         ): Boolean {
+            if (newTimestampMillis <= 0L || !newAccuracyMeters.isFinite() ||
+                newAccuracyMeters < 0f
+            ) {
+                return false
+            }
+
             if (currentTimestampMillis == null || currentAccuracyMeters == null) {
                 return true
             }
 
-            val isNewer = newTimestampMillis > currentTimestampMillis
-            val isMoreAccurate = newAccuracyMeters < currentAccuracyMeters
-
-            return isNewer && isMoreAccurate
+            return newTimestampMillis > currentTimestampMillis
         }
     }
 }
