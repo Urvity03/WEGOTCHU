@@ -22,8 +22,17 @@ import com.wegotchu.app.location.LocationCollector
 import com.wegotchu.app.network.TelemetrySender
 import com.wegotchu.app.sensors.SensorCollector
 import com.wegotchu.app.ui.theme.WEGOTCHUTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.wegotchu.app.contacts.TrustedContact
+import com.wegotchu.app.contacts.TrustedContactPicker
+import com.wegotchu.app.contacts.TrustedContactRepository
+import com.wegotchu.app.contacts.TrustedContactsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.LaunchedEffect
 
 class MainActivity : ComponentActivity() {
 
@@ -32,6 +41,35 @@ class MainActivity : ComponentActivity() {
     private lateinit var telemetryBuilder: TelemetryBuilder
 
     private val telemetrySender = TelemetrySender()
+    private lateinit var trustedContactRepository: TrustedContactRepository
+    private var refreshContacts: (() -> Unit)? = null
+    private val trustedContactPickerLauncher =
+    registerForActivityResult(ActivityResultContracts.PickContact()) { contactUri ->
+        if (contactUri == null) {
+            Log.d("TrustedContacts", "Contact selection cancelled")
+        } else {
+            val contact = TrustedContactPicker.readContact(this, contactUri)
+
+            if (contact == null) {
+                Log.e(
+                    "TrustedContacts",
+                    "Selected contact has no valid name or phone number"
+                )
+            } else {
+                try {
+                    trustedContactRepository.add(contact)
+                    refreshContacts?.invoke()
+                } catch (exception: IllegalArgumentException) {
+                    Log.e(
+                        "TrustedContacts",
+                        "Could not save contact: ${exception.message}"
+                    )
+                } catch (exception: Exception) {
+                    Log.e("TrustedContacts", "Could not save contact", exception)
+                }
+            }
+        }
+    }
 
     private val locationPermissionLauncher =
         registerForActivityResult(
@@ -57,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
        super.onCreate(savedInstanceState)
+       trustedContactRepository = TrustedContactRepository(applicationContext)
 
        Log.d("MainActivity", "onCreate() started")
         enableEdgeToEdge()
@@ -91,17 +130,54 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            WEGOTCHUTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize()
-                ) { innerPadding ->
-                    Greeting(
-                        name = "WEGOTCHU",
-                        modifier = Modifier.padding(innerPadding)
+    WEGOTCHUTheme {
+        var contacts by remember {
+            mutableStateOf(emptyList<TrustedContact>())
+        }
+        LaunchedEffect(Unit) {
+            refreshContacts = {
+                contacts = try {
+                    trustedContactRepository.getAll()
+                } catch (exception: Exception) {
+                   Log.e(
+                    "TrustedContacts",
+                    "Could not load or refresh contacts",
+                     exception
                     )
+                    emptyList()
                 }
             }
+
+        refreshContacts?.invoke()
         }
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            TrustedContactsScreen(
+                contacts = contacts,
+                onAddContact = {
+                    trustedContactPickerLauncher.launch(null)
+                },
+                onRemoveContact = { contact ->
+                    contacts = try {
+                        trustedContactRepository.remove(contact.id)
+                    } catch (exception: Exception) {
+                        Log.e(
+                            "TrustedContacts",
+                            "Could not remove contact",
+                            exception
+                        )
+                        contacts
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            )
+        }
+    }
+}
     }
 
     override fun onResume() {
