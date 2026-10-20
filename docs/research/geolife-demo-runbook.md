@@ -289,3 +289,41 @@ Confirm that:
 - The project environment is Python 3.11.
 - The demo commands are documented.
 - The route-deviation score is described as an unusualness indicator, not a danger probability.
+
+## Mobile Telemetry Integration
+
+The mobile telemetry contract uses nested fields and identifies the source
+device with `device_id`.
+
+The backend or session layer must map `device_id` to a stable pseudonymous
+`user_id` before personalization or route-deviation evaluation.
+
+The raw `device_id` must not be used directly as the user's identity.
+
+### Mobile-to-Internal Field Mapping
+
+| Mobile contract field | Internal pipeline field |
+|---|---|
+| `device_id` | Map to pseudonymous `user_id` |
+| `timestamp` | `timestamp` |
+| `location.latitude` | `latitude` |
+| `location.longitude` | `longitude` |
+| `speed_mps` | `speed_mps` |
+| `location.accuracy_meters` | `accuracy_meters` |
+| `accelerometer.x` | `accelerometer_x` |
+| `accelerometer.y` | `accelerometer_y` |
+| `accelerometer.z` | `accelerometer_z` |
+| `gyroscope.x` | `gyroscope_x` |
+| `gyroscope.y` | `gyroscope_y` |
+| `gyroscope.z` | `gyroscope_z` |
+
+### Missing Gyroscope Data
+
+Gyroscope fields may be unavailable on some mobile devices or during some
+collection periods.
+
+Missing gyroscope values must be represented as `null` or unavailable. They
+must not cause an otherwise valid telemetry event to be rejected.
+
+The route-deviation pipeline must continue processing location data when
+gyroscope readings are missing.
