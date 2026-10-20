@@ -1,3 +1,4 @@
+python scripts\create_geolife_split_manifest.py --help
 # GeoLife Demo Runbook
 
 ## Purpose
