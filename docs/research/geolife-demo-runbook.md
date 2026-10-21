@@ -1,4 +1,3 @@
-python scripts\create_geolife_split_manifest.py --help
 # GeoLife Demo Runbook
 
 ## Purpose
@@ -145,10 +144,14 @@ Get-Content data\processed\geolife\geolife_trajectories.csv -TotalCount 4
 Run:
 
 ```powershell
-python scripts\create_geolife_split_manifest.py --help
+python scripts\create_geolife_split_manifest.py `
+  --input data\processed\geolife\geolife_trajectories.csv `
+  --output data\processed\geolife\geolife_split_manifest.csv `
+  --minimum-history 5
 ```
 
-Use the displayed options to create the manifest. The default split policy is:
+The command above creates the chronological split manifest using the
+processed trajectory file and a minimum history of five trajectories. The default split policy is:
 
 - 60% earliest trajectories: `reference`
 - 20% following trajectories: `validation`
