@@ -53,8 +53,13 @@ Example:
     "z": 0.02
   },
   "battery_level": 0.68,
-  "network_status": "CELLULAR_4G"
+  "network_status": "CELLULAR_4G",
+  "trip_id": "trip_example_001"
 }
+
+`trip_id` is optional. Clients that omit it retain trip-independent telemetry
+ingestion behavior. When supplied, it must identify an existing trip owned by
+the authenticated user.
 
 ## 4. Field Definitions
 
@@ -151,6 +156,11 @@ Type: string
 Required: Yes
 Description: Current network condition
 
+Field: trip_id
+Type: string
+Required: No
+Description: Existing trip identifier; 1-64 characters after surrounding whitespace is removed
+
 ## 5. Validation Rules
 
 The backend should validate incoming telemetry before forwarding it to downstream components.
@@ -193,6 +203,20 @@ The FastAPI backend is responsible for:
 5. Applying authentication and security controls.
 6. Avoiding unnecessary persistent storage of raw personal telemetry.
 
+### Trip Lifecycle Endpoints
+
+Authenticated clients may initialize a trip with
+`POST /api/v1/telemetry/trips/start`, providing a `trip_id` and optionally
+`started_at`. Repeating a start request for the same user and trip ID is
+idempotent.
+
+Clients may finalize a trip with `POST /api/v1/telemetry/trips/complete`,
+providing `trip_id` and optionally `ended_at`. Ordinary completion results in
+`COMPLETED_UNVERIFIED`; an explicit crisis flag results in `ABORTED_CRISIS`,
+and an anomaly flag results in `COMPLETED_ANOMALOUS`. Finalized trips cannot
+be reopened or accept further telemetry. A trip ID is scoped to its
+authenticated owner.
+
 ## 8. Mobile Responsibility
 
 The Android client is responsible for:
@@ -227,4 +251,3 @@ Changes to this interface should be coordinated between the Mobile/Backend and A
 Draft Prototype — Version 0.1
 
 This contract should be reviewed by the AI/ML lead before backend and Android implementation begins.
-
