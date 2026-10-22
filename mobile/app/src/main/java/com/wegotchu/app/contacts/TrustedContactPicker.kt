@@ -1,6 +1,6 @@
-﻿package com.wegotchu.app.contacts
+﻿
+package com.wegotchu.app.contacts
 
-import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.ContactsContract
@@ -9,46 +9,45 @@ object TrustedContactPicker {
 
     fun readContact(
         context: Context,
-        contactUri: Uri
+        phoneUri: Uri
     ): TrustedContact? {
-        val resolver = context.contentResolver
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER
+        )
 
-        val contact = resolver.query(
-            contactUri,
-            arrayOf(
-                ContactsContract.Contacts._ID,
-                ContactsContract.Contacts.DISPLAY_NAME
-            ),
+        return context.contentResolver.query(
+            phoneUri,
+            projection,
             null,
             null,
             null
         )?.use { cursor ->
             if (!cursor.moveToFirst()) return null
 
-            val id = cursor.getString(0) ?: return null
-            val name = cursor.getString(1) ?: return null
-            id to name
-        } ?: return null
+            val idIndex = cursor.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID
+            )
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+            )
+            val numberIndex = cursor.getColumnIndexOrThrow(
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
 
-        val (contactId, name) = contact
+            val id = cursor.getString(idIndex) ?: return null
+            val name = cursor.getString(nameIndex) ?: return null
+            val number = cursor.getString(numberIndex) ?: return null
 
-        val phoneNumber = resolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
-            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-            arrayOf(contactId),
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        } ?: return null
+            if (!ContactValidator.validateName(name)) return null
+            if (!ContactValidator.validatePhoneNumber(number)) return null
 
-        if (!ContactValidator.validateName(name)) return null
-        if (!ContactValidator.validatePhoneNumber(phoneNumber)) return null
-
-        return TrustedContact(
-            id = contactId,
-            name = name.trim(),
-            phoneNumber = ContactValidator.normalizePhoneNumber(phoneNumber)
-        )
+            TrustedContact(
+                id = id,
+                name = name.trim(),
+                phoneNumber = ContactValidator.normalizePhoneNumber(number)
+            )
+        }
     }
 }

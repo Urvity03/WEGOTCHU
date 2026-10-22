@@ -33,6 +33,9 @@ import com.wegotchu.app.contacts.TrustedContactsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
+import android.app.Activity
+import android.content.Intent
+import android.provider.ContactsContract
 
 class MainActivity : ComponentActivity() {
 
@@ -43,33 +46,40 @@ class MainActivity : ComponentActivity() {
     private val telemetrySender = TelemetrySender()
     private lateinit var trustedContactRepository: TrustedContactRepository
     private var refreshContacts: (() -> Unit)? = null
-    private val trustedContactPickerLauncher =
-    registerForActivityResult(ActivityResultContracts.PickContact()) { contactUri ->
-        if (contactUri == null) {
-            Log.d("TrustedContacts", "Contact selection cancelled")
-        } else {
-            val contact = TrustedContactPicker.readContact(this, contactUri)
 
-            if (contact == null) {
-                Log.e(
-                    "TrustedContacts",
-                    "Selected contact has no valid name or phone number"
-                )
-            } else {
-                try {
-                    trustedContactRepository.add(contact)
-                    refreshContacts?.invoke()
-                } catch (exception: IllegalArgumentException) {
+
+private val trustedContactPickerLauncher =
+    registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val phoneUri = result.data?.data
+
+        if (result.resultCode != Activity.RESULT_OK || phoneUri == null) {
+            Log.d("TrustedContacts", "Phone selection cancelled")
+        } else {
+            try {
+                val contact = TrustedContactPicker.readContact(this, phoneUri)
+
+                if (contact == null) {
                     Log.e(
                         "TrustedContacts",
-                        "Could not save contact: ${exception.message}"
+                        "Selected phone number is missing or invalid"
                     )
-                } catch (exception: Exception) {
-                    Log.e("TrustedContacts", "Could not save contact", exception)
+                } else {
+                    trustedContactRepository.add(contact)
+                    refreshContacts?.invoke()
                 }
+            } catch (exception: Exception) {
+                Log.e(
+                    "TrustedContacts",
+                    "Failed to read or save selected phone number",
+                    exception
+                )
             }
         }
     }
+
+
 
     private val locationPermissionLauncher =
         registerForActivityResult(
@@ -157,7 +167,11 @@ class MainActivity : ComponentActivity() {
             TrustedContactsScreen(
                 contacts = contacts,
                 onAddContact = {
-                    trustedContactPickerLauncher.launch(null)
+                    val intent = Intent(
+                        Intent.ACTION_PICK,
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+                    )
+                    trustedContactPickerLauncher.launch(intent)
                 },
                 onRemoveContact = { contact ->
                     contacts = try {
