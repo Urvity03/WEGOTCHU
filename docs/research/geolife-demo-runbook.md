@@ -14,14 +14,12 @@ The current demo focuses on mobility unusualness and route deviation. It does no
 - Extracted GeoLife dataset
 - WEGOTCHU repository
 
-Use the project virtual environment:
+## Fresh Environment Setup
+
+From a fresh repository clone, create the Python 3.11 virtual environment:
 
 ```powershell
-.\.venv311\Scripts\Activate.ps1
-python --version
-```
-
-The Python version should be 3.11.x.
+py -3.11 -m venv .venv311
 
 ## Repository Locations
 
