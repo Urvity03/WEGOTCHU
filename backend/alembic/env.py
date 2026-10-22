@@ -6,7 +6,6 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-
 # Load environment variables from backend/.env
 load_dotenv()
 
@@ -21,8 +20,9 @@ if config.config_file_name is not None:
 
 
 # Import SQLAlchemy Base and models
-from backend.app.database import Base
-from backend.app.models.telemetry_record import TelemetryRecord
+from backend.app.database import Base  # noqa: E402
+from backend.app.models.telemetry_record import TelemetryRecord  # noqa: E402, F401
+from backend.app.models.trip import Trip  # noqa: E402, F401
 
 # Metadata used by Alembic for autogenerate
 target_metadata = Base.metadata
