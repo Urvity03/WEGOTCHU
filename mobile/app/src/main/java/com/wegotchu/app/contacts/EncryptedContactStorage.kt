@@ -1,52 +1,57 @@
-﻿package com.wegotchu.app.contacts
+﻿
+package com.wegotchu.app.contacts
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.io.File
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/**
- * Encrypts trusted-contact data with an AES-GCM key held in Android Keystore.
- *
- * Store only the encrypted payload in the private app files directory.
- * The caller is responsible for validating and serializing contact data.
- */
 class EncryptedContactStorage(context: Context) {
 
     private val appContext = context.applicationContext
+
     private val storageFile: File
         get() = File(appContext.filesDir, STORAGE_FILE_NAME)
 
     @Synchronized
     fun save(plaintext: String) {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+        val temporaryFile =
+            File(appContext.filesDir, "$STORAGE_FILE_NAME.tmp")
 
-        val ciphertext = cipher.doFinal(
-            plaintext.toByteArray(StandardCharsets.UTF_8)
-        )
-        val iv = cipher.iv
+        try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
 
-        // Versioned format: version:base64(iv):base64(ciphertext)
-        val payload = listOf(
-            FORMAT_VERSION,
-            Base64.encodeToString(iv, Base64.NO_WRAP),
-            Base64.encodeToString(ciphertext, Base64.NO_WRAP)
-        ).joinToString(":")
+            val ciphertext = cipher.doFinal(
+                plaintext.toByteArray(StandardCharsets.UTF_8)
+            )
 
-        val temporaryFile = File(appContext.filesDir, "$STORAGE_FILE_NAME.tmp")
-        temporaryFile.writeText(payload, StandardCharsets.UTF_8)
+            val payload = listOf(
+                FORMAT_VERSION,
+                Base64.encodeToString(cipher.iv, Base64.NO_WRAP),
+                Base64.encodeToString(ciphertext, Base64.NO_WRAP)
+            ).joinToString(":")
 
-        if (!temporaryFile.renameTo(storageFile)) {
+            temporaryFile.writeText(payload, StandardCharsets.UTF_8)
+
+            if (!temporaryFile.renameTo(storageFile)) {
+                throw IOException("Could not replace encrypted contacts file")
+            }
+        } catch (exception: Exception) {
             temporaryFile.delete()
-            throw IllegalStateException("Could not save encrypted contacts")
+            throw EncryptedContactStorageException(
+                "Could not save encrypted contacts",
+                exception
+            )
         }
     }
 
@@ -54,38 +59,76 @@ class EncryptedContactStorage(context: Context) {
     fun load(): String? {
         if (!storageFile.exists()) return null
 
-        val parts = storageFile.readText(StandardCharsets.UTF_8).split(":")
-        require(parts.size == 3 && parts[0] == FORMAT_VERSION) {
-            "Encrypted contacts have an unsupported format"
+        try {
+            val parts = storageFile
+                .readText(StandardCharsets.UTF_8)
+                .split(":")
+
+            if (parts.size != 3 || parts[0] != FORMAT_VERSION) {
+                throw IOException("Unsupported encrypted contacts format")
+            }
+
+            val iv = Base64.decode(parts[1], Base64.NO_WRAP)
+            val ciphertext = Base64.decode(parts[2], Base64.NO_WRAP)
+
+            if (iv.size != GCM_IV_LENGTH_BYTES) {
+                throw IOException("Invalid encrypted contacts IV")
+            }
+
+            if (ciphertext.size < GCM_TAG_LENGTH_BITS / 8) {
+                throw IOException("Encrypted contacts payload is truncated")
+            }
+
+            val key = getExistingKey()
+                ?: throw IOException("Trusted contacts encryption key is missing")
+
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                key,
+                GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv)
+            )
+
+            return String(
+                cipher.doFinal(ciphertext),
+                StandardCharsets.UTF_8
+            )
+        } catch (exception: Exception) {
+            throw EncryptedContactStorageException(
+                if (exception is AEADBadTagException) {
+                    "Trusted contacts failed authentication"
+                } else {
+                    "Could not read or decrypt trusted contacts"
+                },
+                exception
+            )
         }
-
-        val iv = Base64.decode(parts[1], Base64.NO_WRAP)
-        val ciphertext = Base64.decode(parts[2], Base64.NO_WRAP)
-
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(
-            Cipher.DECRYPT_MODE,
-            getOrCreateKey(),
-            GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv)
-        )
-
-        return String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8)
     }
 
     @Synchronized
     fun delete() {
-        if (storageFile.exists() && !storageFile.delete()) {
-            throw IllegalStateException("Could not delete encrypted contacts")
+        try {
+            if (storageFile.exists() && !storageFile.delete()) {
+                throw IOException("Could not delete encrypted contacts")
+            }
+        } catch (exception: Exception) {
+            throw EncryptedContactStorageException(
+                "Could not delete encrypted contacts",
+                exception
+            )
         }
     }
 
-    private fun getOrCreateKey(): SecretKey {
+    private fun getExistingKey(): SecretKey? {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
             load(null)
         }
 
-        val existingKey = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
-        if (existingKey != null) return existingKey
+        return keyStore.getKey(KEY_ALIAS, null) as? SecretKey
+    }
+
+    private fun getOrCreateKey(): SecretKey {
+        getExistingKey()?.let { return it }
 
         val keyGenerator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
@@ -95,10 +138,13 @@ class EncryptedContactStorage(context: Context) {
         keyGenerator.init(
             KeyGenParameterSpec.Builder(
                 KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                KeyProperties.PURPOSE_ENCRYPT or
+                    KeyProperties.PURPOSE_DECRYPT
             )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setEncryptionPaddings(
+                    KeyProperties.ENCRYPTION_PADDING_NONE
+                )
                 .setRandomizedEncryptionRequired(true)
                 .setKeySize(AES_KEY_SIZE_BITS)
                 .build()
@@ -115,5 +161,11 @@ class EncryptedContactStorage(context: Context) {
         const val FORMAT_VERSION = "v1"
         const val AES_KEY_SIZE_BITS = 256
         const val GCM_TAG_LENGTH_BITS = 128
+        const val GCM_IV_LENGTH_BYTES = 12
     }
 }
+
+class EncryptedContactStorageException(
+    message: String,
+    cause: Throwable? = null
+) : IOException(message, cause)

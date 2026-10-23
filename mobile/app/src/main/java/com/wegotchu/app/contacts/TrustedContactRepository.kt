@@ -1,4 +1,5 @@
-﻿package com.wegotchu.app.contacts
+﻿
+package com.wegotchu.app.contacts
 
 import android.content.Context
 import org.json.JSONArray
@@ -11,14 +12,23 @@ class TrustedContactRepository(context: Context) {
     @Synchronized
     fun getAll(): List<TrustedContact> {
         val json = storage.load() ?: return emptyList()
-        val array = JSONArray(json)
 
-        return (0 until array.length()).map { index ->
-            val item = array.getJSONObject(index)
-            TrustedContact(
-                id = item.getString("id"),
-                name = item.getString("name"),
-                phoneNumber = item.getString("phoneNumber")
+        return try {
+            val array = JSONArray(json)
+
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+
+                TrustedContact(
+                    id = item.getString("id"),
+                    name = item.getString("name"),
+                    phoneNumber = item.getString("phoneNumber")
+                )
+            }
+        } catch (exception: Exception) {
+            throw TrustedContactRepositoryException(
+                "Stored trusted contacts are invalid",
+                exception
             )
         }
     }
@@ -35,13 +45,18 @@ class TrustedContactRepository(context: Context) {
             "Invalid phone number"
         }
 
+        // Storage errors must propagate. Never treat corrupted data as empty.
         val current = getAll()
         val normalizedPhone =
             ContactValidator.normalizePhoneNumber(contact.phoneNumber)
 
-        require(current.none {
-            it.id == contact.id || ContactValidator.normalizePhoneNumber(it.phoneNumber) == normalizedPhone
-        }) {
+        require(
+            current.none {
+                it.id == contact.id ||
+                    ContactValidator.normalizePhoneNumber(it.phoneNumber) ==
+                    normalizedPhone
+            }
+        ) {
             "This contact is already saved"
         }
 
@@ -49,6 +64,7 @@ class TrustedContactRepository(context: Context) {
             name = contact.name.trim(),
             phoneNumber = normalizedPhone
         )
+
         persist(updated)
         return updated
     }
@@ -62,6 +78,7 @@ class TrustedContactRepository(context: Context) {
 
     private fun persist(contacts: List<TrustedContact>) {
         val array = JSONArray()
+
         contacts.forEach { contact ->
             array.put(
                 JSONObject()
@@ -70,6 +87,12 @@ class TrustedContactRepository(context: Context) {
                     .put("phoneNumber", contact.phoneNumber)
             )
         }
+
         storage.save(array.toString())
     }
 }
+
+class TrustedContactRepositoryException(
+    message: String,
+    cause: Throwable? = null
+) : IllegalStateException(message, cause)

@@ -36,6 +36,9 @@ import androidx.compose.runtime.LaunchedEffect
 import android.app.Activity
 import android.content.Intent
 import android.provider.ContactsContract
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -48,6 +51,7 @@ class MainActivity : ComponentActivity() {
     private var refreshContacts: (() -> Unit)? = null
 
 
+
 private val trustedContactPickerLauncher =
     registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -57,24 +61,50 @@ private val trustedContactPickerLauncher =
         if (result.resultCode != Activity.RESULT_OK || phoneUri == null) {
             Log.d("TrustedContacts", "Phone selection cancelled")
         } else {
-            try {
-                val contact = TrustedContactPicker.readContact(this, phoneUri)
+            lifecycleScope.launch {
+                try {
+                    // Read the selected phone URI off the main thread.
+                    val contact = withContext(Dispatchers.IO) {
+                        TrustedContactPicker.readContact(
+                            this@MainActivity,
+                            phoneUri
+                        )
+                    }
 
-                if (contact == null) {
+                    if (contact == null) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Unable to read this contact. Please try another.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        // Save the encrypted contact off the main thread.
+                        withContext(Dispatchers.IO) {
+                            trustedContactRepository.add(contact)
+                        }
+
+                        // Refresh Compose state on the main thread.
+                        refreshContacts?.invoke()
+
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Trusted contact added",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } catch (exception: Exception) {
                     Log.e(
                         "TrustedContacts",
-                        "Selected phone number is missing or invalid"
+                        "Failed to read or save selected phone number",
+                        exception
                     )
-                } else {
-                    trustedContactRepository.add(contact)
-                    refreshContacts?.invoke()
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Could not add trusted contact. Please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
-            } catch (exception: Exception) {
-                Log.e(
-                    "TrustedContacts",
-                    "Failed to read or save selected phone number",
-                    exception
-                )
             }
         }
     }
