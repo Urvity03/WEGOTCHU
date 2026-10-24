@@ -22,8 +22,23 @@ import com.wegotchu.app.location.LocationCollector
 import com.wegotchu.app.network.TelemetrySender
 import com.wegotchu.app.sensors.SensorCollector
 import com.wegotchu.app.ui.theme.WEGOTCHUTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.wegotchu.app.contacts.TrustedContact
+import com.wegotchu.app.contacts.TrustedContactPicker
+import com.wegotchu.app.contacts.TrustedContactRepository
+import com.wegotchu.app.contacts.TrustedContactsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.LaunchedEffect
+import android.app.Activity
+import android.content.Intent
+import android.provider.ContactsContract
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -32,6 +47,69 @@ class MainActivity : ComponentActivity() {
     private lateinit var telemetryBuilder: TelemetryBuilder
 
     private val telemetrySender = TelemetrySender()
+    private lateinit var trustedContactRepository: TrustedContactRepository
+    private var refreshContacts: (() -> Unit)? = null
+
+
+
+private val trustedContactPickerLauncher =
+    registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val phoneUri = result.data?.data
+
+        if (result.resultCode != Activity.RESULT_OK || phoneUri == null) {
+            Log.d("TrustedContacts", "Phone selection cancelled")
+        } else {
+            lifecycleScope.launch {
+                try {
+                    // Read the selected phone URI off the main thread.
+                    val contact = withContext(Dispatchers.IO) {
+                        TrustedContactPicker.readContact(
+                            this@MainActivity,
+                            phoneUri
+                        )
+                    }
+
+                    if (contact == null) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Unable to read this contact. Please try another.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        // Save the encrypted contact off the main thread.
+                        withContext(Dispatchers.IO) {
+                            trustedContactRepository.add(contact)
+                        }
+
+                        // Refresh Compose state on the main thread.
+                        refreshContacts?.invoke()
+
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Trusted contact added",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } catch (exception: Exception) {
+                    Log.e(
+                        "TrustedContacts",
+                        "Failed to read or save selected phone number",
+                        exception
+                    )
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Could not add trusted contact. Please try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+
 
     private val locationPermissionLauncher =
         registerForActivityResult(
@@ -57,6 +135,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
        super.onCreate(savedInstanceState)
+       trustedContactRepository = TrustedContactRepository(applicationContext)
 
        Log.d("MainActivity", "onCreate() started")
         enableEdgeToEdge()
@@ -91,17 +170,58 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            WEGOTCHUTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize()
-                ) { innerPadding ->
-                    Greeting(
-                        name = "WEGOTCHU",
-                        modifier = Modifier.padding(innerPadding)
+    WEGOTCHUTheme {
+        var contacts by remember {
+            mutableStateOf(emptyList<TrustedContact>())
+        }
+        LaunchedEffect(Unit) {
+            refreshContacts = {
+                contacts = try {
+                    trustedContactRepository.getAll()
+                } catch (exception: Exception) {
+                   Log.e(
+                    "TrustedContacts",
+                    "Could not load or refresh contacts",
+                     exception
                     )
+                    emptyList()
                 }
             }
+
+        refreshContacts?.invoke()
         }
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            TrustedContactsScreen(
+                contacts = contacts,
+                onAddContact = {
+                    val intent = Intent(
+                        Intent.ACTION_PICK,
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+                    )
+                    trustedContactPickerLauncher.launch(intent)
+                },
+                onRemoveContact = { contact ->
+                    contacts = try {
+                        trustedContactRepository.remove(contact.id)
+                    } catch (exception: Exception) {
+                        Log.e(
+                            "TrustedContacts",
+                            "Could not remove contact",
+                            exception
+                        )
+                        contacts
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            )
+        }
+    }
+}
     }
 
     override fun onResume() {
