@@ -120,3 +120,51 @@ def test_output_cannot_overwrite_manifest(tmp_path):
 
     with pytest.raises(ValueError, match="differ"):
         evaluate_audio.evaluate_manifest(manifest, manifest)
+
+
+def test_output_cannot_overwrite_listed_audio_file(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    audio_file = tmp_path / "sample.wav"
+    original_audio = b"original audio bytes"
+    audio_file.write_bytes(original_audio)
+
+    write_manifest(
+        manifest,
+        [{"sample_id": "sample-001", "audio_path": "sample.wav"}],
+    )
+    monkeypatch.setattr(evaluate_audio, "run_audio_inference", fake_prediction)
+
+    with pytest.raises(ValueError, match="audio file listed in the manifest"):
+        evaluate_audio.evaluate_manifest(manifest, audio_file)
+
+    assert audio_file.read_bytes() == original_audio
+
+
+def test_model_version_uses_first_successful_result(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    output = tmp_path / "report.json"
+
+    write_manifest(
+        manifest,
+        [
+            {"sample_id": "sample-001", "audio_path": "missing.wav"},
+            {"sample_id": "sample-002", "audio_path": "valid.wav"},
+        ],
+    )
+
+    def fail_first_then_succeed(audio_path):
+        if Path(audio_path).name == "missing.wav":
+            raise FileNotFoundError("Audio file not found")
+        return fake_prediction(audio_path)
+
+    monkeypatch.setattr(
+        evaluate_audio,
+        "run_audio_inference",
+        fail_first_then_succeed,
+    )
+
+    report = evaluate_audio.evaluate_manifest(manifest, output)
+
+    assert report["results"][0]["status"] == "error"
+    assert report["results"][1]["status"] == "success"
+    assert report["model_version"] == "audio-baseline-v2"
