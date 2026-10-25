@@ -37,9 +37,7 @@ client = TestClient(app)
 
 
 def auth_headers(user_id="sos_test_user"):
-    return {
-        "Authorization": f"Bearer {create_access_token(user_id)}"
-    }
+    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
 
 
 def test_create_sos_alert():

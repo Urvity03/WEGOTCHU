@@ -17,14 +17,10 @@ class SOSAlertCreate(BaseModel):
         )
 
         if coordinates_present[0] != coordinates_present[1]:
-            raise ValueError(
-                "Latitude and longitude must be provided together"
-            )
+            raise ValueError("Latitude and longitude must be provided together")
 
         if self.accuracy_meters is not None and not all(coordinates_present):
-            raise ValueError(
-                "Location accuracy requires latitude and longitude"
-            )
+            raise ValueError("Location accuracy requires latitude and longitude")
 
         return self
 
