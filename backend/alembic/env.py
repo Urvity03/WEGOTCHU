@@ -23,6 +23,7 @@ if config.config_file_name is not None:
 # Import SQLAlchemy Base and models
 from backend.app.database import Base
 from backend.app.models.telemetry_record import TelemetryRecord
+from backend.app.models.sos_alert import SOSAlert
 
 # Metadata used by Alembic for autogenerate
 target_metadata = Base.metadata
