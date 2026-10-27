@@ -27,6 +27,34 @@ def fake_prediction(audio_path):
     }
 
 
+def test_model_version_is_unknown_when_all_recordings_fail(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    output = tmp_path / "report.json"
+
+    write_manifest(
+        manifest,
+        [
+            {"sample_id": "sample-001", "audio_path": "missing1.wav"},
+            {"sample_id": "sample-002", "audio_path": "missing2.wav"},
+        ],
+    )
+
+    def failing_prediction(audio_path):
+        raise FileNotFoundError("Audio file not found")
+
+    monkeypatch.setattr(
+        evaluate_audio,
+        "run_audio_inference",
+        failing_prediction,
+    )
+
+    report = evaluate_audio.evaluate_manifest(manifest, output)
+
+    assert report["summary"]["successful_samples"] == 0
+    assert report["summary"]["failed_samples"] == 2
+    assert report["model_version"] == "unknown"
+
+
 def test_evaluate_manifest_success(tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.csv"
     output = tmp_path / "report.json"
