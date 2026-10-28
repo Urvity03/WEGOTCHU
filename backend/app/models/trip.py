@@ -176,7 +176,11 @@ class StartTripRequest(BaseModel):
 
 
 class CompleteTripRequest(BaseModel):
-    """Request payload to finalize a Safety Mode trip."""
+    """Request payload to finalize a Safety Mode trip.
+
+    The anomaly flags remain accepted for request compatibility but are not
+    treated as verification evidence; backend inference determines anomaly state.
+    """
 
     trip_id: TripId
     ended_at: datetime | None = None
@@ -193,3 +197,10 @@ class TripResponse(BaseModel):
     trip_status: str
     started_at: datetime
     ended_at: datetime | None = None
+
+
+class TripBriefingRequest(BaseModel):
+    """Request payload to synthesize a GenAI briefing for a trip."""
+
+    audience: str = "USER"
+    user_display_name: str = "User"
