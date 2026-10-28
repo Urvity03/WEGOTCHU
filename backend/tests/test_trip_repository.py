@@ -21,6 +21,12 @@ from backend.app.repositories.trip_repository import (
     TripOwnershipError,
     TripRepository,
 )
+from ai.route_deviation.loader import Trajectory, TrajectoryPoint
+from ai.route_deviation.reference import (
+    STATUS_INSUFFICIENT_HISTORY,
+    STATUS_SUFFICIENT,
+    build_reference_set,
+)
 
 
 @pytest.fixture
@@ -479,6 +485,7 @@ def test_get_eligible_reference_trips_excludes_pending_and_anomalous(repo):
         trip_id="trip-normal-1",
         user_id=user_id,
         new_status=TripStatus.COMPLETED_NORMAL,
+        ended_at=t0 + timedelta(minutes=5),
     )
 
     # 2. COMPLETED_UNVERIFIED trip (MUST be excluded)
@@ -561,7 +568,37 @@ def test_get_eligible_reference_trips_excludes_pending_and_anomalous(repo):
         new_status=TripStatus.ABORTED_CRISIS,
     )
 
-    # 7. Another user's COMPLETED_NORMAL trip (cross-user isolation; MUST be excluded)
+    # 7. Expired trip (MUST be excluded)
+    repo.create_trip(
+        trip_id="trip-expired-ref",
+        user_id=user_id,
+        started_at=t0 + timedelta(minutes=55),
+    )
+    repo.update_trip_status(
+        trip_id="trip-expired-ref",
+        user_id=user_id,
+        new_status=TripStatus.EXPIRED_INACTIVE,
+    )
+
+    # A completed trip overlapping the candidate boundary is not historical.
+    repo.create_trip(
+        trip_id="trip-overlapping-normal",
+        user_id=user_id,
+        started_at=t0 + timedelta(hours=1),
+    )
+    repo.update_trip_status(
+        trip_id="trip-overlapping-normal",
+        user_id=user_id,
+        new_status=TripStatus.ACTIVE,
+    )
+    repo.update_trip_status(
+        trip_id="trip-overlapping-normal",
+        user_id=user_id,
+        new_status=TripStatus.COMPLETED_NORMAL,
+        ended_at=t0 + timedelta(hours=2, seconds=1),
+    )
+
+    # 8. Another user's COMPLETED_NORMAL trip (cross-user isolation; MUST be excluded)
     repo.create_trip(
         trip_id="trip-other-user",
         user_id="other-user-999",
@@ -579,7 +616,7 @@ def test_get_eligible_reference_trips_excludes_pending_and_anomalous(repo):
         new_status=TripStatus.COMPLETED_NORMAL,
     )
 
-    # 8. Future COMPLETED_NORMAL trip (must strictly precede candidate)
+    # 9. Future COMPLETED_NORMAL trip (must strictly precede candidate)
     repo.create_trip(
         trip_id="trip-future-normal",
         user_id=user_id,
@@ -595,6 +632,7 @@ def test_get_eligible_reference_trips_excludes_pending_and_anomalous(repo):
         trip_id="trip-future-normal",
         user_id=user_id,
         new_status=TripStatus.COMPLETED_NORMAL,
+        ended_at=t0 + timedelta(hours=5, minutes=5),
     )
 
     # Candidate start time is t0 + 2 hours
@@ -630,6 +668,7 @@ def test_get_eligible_historical_trajectories_loads_points_and_excludes_pending(
         trip_id="trip-traj-normal",
         user_id=user_id,
         new_status=TripStatus.COMPLETED_NORMAL,
+        ended_at=t0 + timedelta(seconds=20),
     )
 
     rec1 = TelemetryRecord(
@@ -716,3 +755,124 @@ def test_get_eligible_historical_trajectories_loads_points_and_excludes_pending(
     assert len(trajs[0].points) == 2
     assert not db_session.is_modified(rec1)
     assert not db_session.is_modified(rec2)
+
+
+@pytest.mark.parametrize(
+    ("historical_count", "expected_status"),
+    [
+        (0, STATUS_INSUFFICIENT_HISTORY),
+        (4, STATUS_INSUFFICIENT_HISTORY),
+        (5, STATUS_SUFFICIENT),
+    ],
+)
+def test_persisted_historical_trajectories_preserve_reference_threshold(
+    db_session, repo, historical_count, expected_status
+):
+    candidate_start = datetime(2026, 10, 22, 10, 0, 0, tzinfo=timezone.utc)
+    user_id = "pseudo-user-reference-threshold"
+
+    for index in range(historical_count):
+        trip_id = f"historical-trip-{index}"
+        trip_start = candidate_start - timedelta(days=historical_count - index)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=trip_start,
+        )
+        repo.update_trip_status(
+            trip_id=trip_id,
+            user_id=user_id,
+            new_status=TripStatus.ACTIVE,
+        )
+        repo.update_trip_status(
+            trip_id=trip_id,
+            user_id=user_id,
+            new_status=TripStatus.COMPLETED_NORMAL,
+            ended_at=trip_start + timedelta(seconds=10),
+        )
+        db_session.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id="device",
+                    trip_id=trip_id,
+                    timestamp=trip_start + timedelta(seconds=offset),
+                    latitude=28.6139 + index * 0.001 + offset * 0.00001,
+                    longitude=77.2090 + index * 0.001 + offset * 0.00001,
+                    accuracy_meters=5.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.8,
+                    accelerometer_z=0.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for offset in (0, 10)
+            ]
+        )
+
+    db_session.commit()
+    historical = repo.get_eligible_historical_trajectories(
+        user_id=user_id,
+        before_timestamp=candidate_start,
+    )
+    candidate = Trajectory(
+        user_id=user_id,
+        trajectory_id="candidate-trip",
+        points=(
+            TrajectoryPoint(
+                latitude=28.7,
+                longitude=77.3,
+                timestamp=candidate_start,
+            ),
+            TrajectoryPoint(
+                latitude=28.71,
+                longitude=77.31,
+                timestamp=candidate_start + timedelta(seconds=10),
+            ),
+        ),
+    )
+
+    references = build_reference_set(historical, candidate)
+
+    assert [trajectory.trajectory_id for trajectory in historical] == [
+        f"historical-trip-{index}" for index in range(historical_count)
+    ]
+    assert all(trajectory.user_id == user_id for trajectory in references)
+    assert candidate.trajectory_id not in {
+        trajectory.trajectory_id for trajectory in references
+    }
+    assert references.status == expected_status
+    assert references.is_sufficient is (historical_count >= 5)
+
+
+def test_eligible_reference_trips_exclude_candidate_id(repo):
+    start = datetime(2026, 10, 20, 10, 0, 0, tzinfo=timezone.utc)
+    user_id = "user-candidate-exclusion"
+    for trip_id, started_at in (
+        ("eligible-history", start),
+        ("candidate-trip", start + timedelta(hours=1)),
+    ):
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=started_at,
+        )
+        repo.update_trip_status(
+            trip_id=trip_id,
+            user_id=user_id,
+            new_status=TripStatus.ACTIVE,
+        )
+        repo.update_trip_status(
+            trip_id=trip_id,
+            user_id=user_id,
+            new_status=TripStatus.COMPLETED_NORMAL,
+            ended_at=started_at + timedelta(seconds=10),
+        )
+
+    candidates = repo.get_eligible_reference_trips(
+        user_id=user_id,
+        before_timestamp=start + timedelta(hours=2),
+        exclude_trip_id="candidate-trip",
+    )
+
+    assert [trip.trip_id for trip in candidates] == ["eligible-history"]

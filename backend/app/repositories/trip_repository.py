@@ -211,6 +211,7 @@ class TripRepository:
         self,
         user_id: str,
         before_timestamp: datetime,
+        exclude_trip_id: str | None = None,
     ) -> list[Trip]:
         """
         Retrieve eligible historical reference trips for a user.
@@ -219,7 +220,8 @@ class TripRepository:
           1. Pseudonymous User Isolation: Only trips matching user_id.
           2. Explicit Normal Completion: Status must equal COMPLETED_NORMAL.
              (Pending, unverified, anomalous, aborted, and expired trips are strictly excluded).
-          3. Strict Temporal Precedence: started_at < before_timestamp.
+          3. Strict Temporal Precedence: the trip started and ended before
+             before_timestamp.
           4. Deterministic Ordering: started_at ASC, trip_id ASC.
         """
         if not isinstance(user_id, str) or not user_id.strip():
@@ -232,21 +234,21 @@ class TripRepository:
         utc_before = before_timestamp.astimezone(timezone.utc)
         clean_user_id = user_id.strip()
 
-        return (
-            self.db.query(Trip)
-            .filter(
-                Trip.user_id == clean_user_id,
-                Trip.status == TripStatus.COMPLETED_NORMAL.value,
-                Trip.started_at < utc_before,
-            )
-            .order_by(Trip.started_at.asc(), Trip.trip_id.asc())
-            .all()
+        query = self.db.query(Trip).filter(
+            Trip.user_id == clean_user_id,
+            Trip.status == TripStatus.COMPLETED_NORMAL.value,
+            Trip.started_at < utc_before,
+            Trip.ended_at < utc_before,
         )
+        if exclude_trip_id is not None:
+            query = query.filter(Trip.trip_id != exclude_trip_id)
+        return query.order_by(Trip.started_at.asc(), Trip.trip_id.asc()).all()
 
     def get_eligible_historical_trajectories(
         self,
         user_id: str,
         before_timestamp: datetime,
+        exclude_trip_id: str | None = None,
     ) -> list[Trajectory]:
         """
         Retrieve eligible historical reference trajectories for a user.
@@ -257,19 +259,22 @@ class TripRepository:
              Trips in INITIALIZED, ACTIVE, COMPLETED_UNVERIFIED,
              COMPLETION_PENDING, COMPLETED_ANOMALOUS, ABORTED_CRISIS,
              or EXPIRED_INACTIVE are strictly excluded.
-          3. Strict Temporal Precedence: Trip started_at < before_timestamp.
+          3. Strict Temporal Precedence: Trip started_at and ended_at both
+             precede before_timestamp.
           4. Valid Trajectory: Each trip's telemetry observations are converted
              via records_to_candidate_trajectory (>= 2 valid points required).
         """
         eligible_trips = self.get_eligible_reference_trips(
-            user_id=user_id, before_timestamp=before_timestamp
+            user_id=user_id,
+            before_timestamp=before_timestamp,
+            exclude_trip_id=exclude_trip_id,
         )
         trajectories: list[Trajectory] = []
         for trip in eligible_trips:
             records = (
                 self.db.query(TelemetryRecord)
                 .filter(TelemetryRecord.trip_id == trip.trip_id)
-                .order_by(TelemetryRecord.timestamp.asc())
+                .order_by(TelemetryRecord.timestamp.asc(), TelemetryRecord.id.asc())
                 .all()
             )
             normalized_records = [
@@ -294,3 +299,32 @@ class TripRepository:
             if traj is not None:
                 trajectories.append(traj)
         return trajectories
+
+    def get_trip_telemetry_records(self, trip_id: str) -> list[dict[str, object]]:
+        """Return one trip's persisted telemetry in deterministic chronological order."""
+        records = (
+            self.db.query(TelemetryRecord)
+            .filter(TelemetryRecord.trip_id == trip_id)
+            .order_by(TelemetryRecord.timestamp.asc(), TelemetryRecord.id.asc())
+            .all()
+        )
+        return [
+            {
+                "device_id": record.device_id,
+                "timestamp": (
+                    record.timestamp.replace(tzinfo=timezone.utc)
+                    if record.timestamp.tzinfo is None
+                    else record.timestamp
+                ),
+                "latitude": record.latitude,
+                "longitude": record.longitude,
+                "speed_mps": record.speed_mps,
+                "accelerometer_x": record.accelerometer_x,
+                "accelerometer_y": record.accelerometer_y,
+                "accelerometer_z": record.accelerometer_z,
+                "gyroscope_x": record.gyroscope_x,
+                "gyroscope_y": record.gyroscope_y,
+                "gyroscope_z": record.gyroscope_z,
+            }
+            for record in records
+        ]
