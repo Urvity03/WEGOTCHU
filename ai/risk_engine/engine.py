@@ -60,8 +60,10 @@ class RiskEngine:
            handled by the Deterministic Policy Engine, not this class.
 
       4. Partial Availability (one signal available, other unavailable/cold-start):
-         - If the available validated signal is normal, the assessment is NORMAL with reduced
-           confidence (0.65), reflecting genuine uncertainty from the missing modality.
+         - If the available validated signal is normal and the unavailable signal is
+           cleanly missing or cold-start (INSUFFICIENT_HISTORY or INSUFFICIENT_DATA),
+           the assessment is NORMAL with reduced confidence (0.65), reflecting genuine
+           uncertainty from the missing modality.
          - If the available validated signal is anomalous, the assessment escalates to UNUSUAL
            (MONITOR) based on that single modality.
          - This is not the same as all-signals-missing, which is treated separately below.
@@ -71,6 +73,12 @@ class RiskEngine:
          This avoids the silent false assurance that absence of evidence is evidence of safety,
          while not triggering a user-visible check-in (consistent with Principle 4 of the policy:
          Active Mitigation of False Alarms).
+
+      6. Detector Failure / Corrupted Input: If a detector reports a computational error,
+         corrupted data, or failure (e.g. INVALID_DATA, COMPUTATION_ERROR), the engine NEVER
+         converts the evaluation into a NORMAL assessment, even if the other signal is normal.
+         It escalates conservatively to UNUSUAL (MONITOR) with degraded confidence (0.35)
+         and preserves the explicit detector error status in telemetry_summary.
     """
 
     def __init__(
@@ -120,6 +128,42 @@ class RiskEngine:
             else None
         )
 
+        # Validate that extracted scores are finite numbers in [0.0, 1.0]
+        route_invalid = False
+        if route_score is not None:
+            if (
+                not isinstance(route_score, (int, float))
+                or isinstance(route_score, bool)
+                or not math.isfinite(route_score)
+                or not (0.0 <= float(route_score) <= 1.0)
+            ):
+                route_score = None
+                route_invalid = True
+            else:
+                route_score = float(route_score)
+
+        motion_invalid = False
+        if motion_score is not None:
+            if (
+                not isinstance(motion_score, (int, float))
+                or isinstance(motion_score, bool)
+                or not math.isfinite(motion_score)
+                or not (0.0 <= float(motion_score) <= 1.0)
+            ):
+                motion_score = None
+                motion_invalid = True
+            else:
+                motion_score = float(motion_score)
+
+        # Sanitize speed_mps
+        if speed_mps is not None and (
+            not isinstance(speed_mps, (int, float))
+            or isinstance(speed_mps, bool)
+            or not math.isfinite(speed_mps)
+            or speed_mps < 0.0
+        ):
+            speed_mps = None
+
         # Determine active validated signals
         active_signals: list[str] = []
         is_route_anomalous = False
@@ -159,11 +203,29 @@ class RiskEngine:
             corridor_deviation_meters=corridor_dev_meters,
             motion_state=motion_state,
             acoustic_anomaly_score=None,
+            motion_status=(
+                motion_result.status if motion_result is not None else "UNAVAILABLE"
+            ),
+            route_status=(
+                route_result.status if route_result is not None else "UNAVAILABLE"
+            ),
         )
 
         # Deterministic Risk & Action Policy Logic
         has_route = route_score is not None
         has_motion = motion_score is not None
+
+        # Check for detector failures or corrupted inputs
+        route_failure = route_invalid or (
+            route_result is not None
+            and route_result.status
+            in ("COMPUTATION_ERROR", "INVALID_INPUT", "ERROR", "FAILED")
+        )
+        motion_failure = motion_invalid or (
+            motion_result is not None
+            and motion_result.status in ("INVALID_DATA", "ERROR", "FAILED")
+        )
+        has_detector_failure = route_failure or motion_failure
 
         if not has_route and not has_motion:
             # Both signals are missing or insufficient (e.g. cold start + no sensors).
@@ -220,8 +282,19 @@ class RiskEngine:
             raw_score = active_score
             calibrated_score = active_score
 
+        elif has_detector_failure:
+            # A detector reported a computational error, corrupted input, or crash.
+            # Safety Principle: Never manufacture a NORMAL assessment when a detector failed.
+            # Escalate conservatively to UNUSUAL with MONITOR and degraded confidence.
+            risk_level = RiskLevel.UNUSUAL
+            action = RecommendedAction.MONITOR
+            confidence = 0.35  # Degraded confidence reflecting detector failure
+            available_scores = [s for s in (route_score, motion_score) if s is not None]
+            raw_score = float(max(available_scores)) if available_scores else None
+            calibrated_score = raw_score
+
         else:
-            # At least one signal observed and neither exceeded its anomaly threshold.
+            # At least one signal observed, no detector failure, and neither exceeded threshold.
             risk_level = RiskLevel.NORMAL
             action = RecommendedAction.NONE
             # High confidence when both modalities observed normal; reduced when partial

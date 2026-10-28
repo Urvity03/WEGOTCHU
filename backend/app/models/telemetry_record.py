@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -13,6 +13,13 @@ class TelemetryRecord(Base):
         Integer,
         primary_key=True,
         autoincrement=True,
+    )
+
+    trip_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("trips.trip_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     version: Mapped[str] = mapped_column(
