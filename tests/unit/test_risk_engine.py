@@ -353,7 +353,8 @@ def test_route_none_no_result_yields_unavailable_location():
 def test_invalid_route_result_score_preserved_as_none():
     """
     A RouteDeviationResult with non-SUCCESS status and None score must have
-    route_anomaly=None in risk_vector (never substituted with 0.0).
+    route_anomaly=None in risk_vector (never substituted with 0.0), and must
+    escalate to UNUSUAL / MONITOR rather than manufacturing a NORMAL assessment.
     """
     engine = RiskEngine()
     route_res = _make_route_result(
@@ -372,12 +373,16 @@ def test_invalid_route_result_score_preserved_as_none():
     assert (
         a.risk_vector.route_anomaly is None
     ), "Non-SUCCESS route result must preserve None score, not convert to 0.0"
+    assert a.risk_level == RiskLevel.UNUSUAL, "Failing detector must not produce NORMAL"
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
 
 
 def test_invalid_motion_result_score_preserved_as_none():
     """
     MotionAnomalyResult with non-SUCCESS status and None score must have
-    kinematic_anomaly=None in risk_vector (never substituted with 0.0).
+    kinematic_anomaly=None in risk_vector (never substituted with 0.0), and must
+    escalate to UNUSUAL / MONITOR rather than manufacturing a NORMAL assessment.
     """
     engine = RiskEngine()
     route_res = _make_route_result(score=0.10)
@@ -395,6 +400,111 @@ def test_invalid_motion_result_score_preserved_as_none():
     assert (
         a.risk_vector.kinematic_anomaly is None
     ), "Non-SUCCESS motion result must preserve None score, not convert to 0.0"
+    assert a.risk_level == RiskLevel.UNUSUAL, "Failing detector must not produce NORMAL"
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
+
+
+def test_route_normal_with_failing_motion_escalates_to_unusual_monitor():
+    """
+    Item 2: One detector normal and the other failing.
+    Route is validated normal (0.15), but motion failed (INVALID_DATA).
+    Must escalate to UNUSUAL / MONITOR with degraded confidence, never NORMAL.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.15)
+    motion_res = _make_motion_result(score=None, status="INVALID_DATA")
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
+    assert a.risk_vector.route_anomaly == 0.15
+    assert a.risk_vector.kinematic_anomaly is None
+    assert a.telemetry_summary.motion_status == "INVALID_DATA"
+
+
+def test_motion_normal_with_failing_route_escalates_to_unusual_monitor():
+    """
+    Item 2: One detector normal and the other failing.
+    Motion is validated normal (0.12), but route failed (COMPUTATION_ERROR).
+    Must escalate to UNUSUAL / MONITOR with degraded confidence, never NORMAL.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=None, status="COMPUTATION_ERROR")
+    motion_res = _make_motion_result(score=0.12)
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
+    assert a.risk_vector.kinematic_anomaly == 0.12
+    assert a.risk_vector.route_anomaly is None
+    assert a.telemetry_summary.route_status == "COMPUTATION_ERROR"
+
+
+def test_motion_insufficient_samples_with_normal_route_is_normal():
+    """
+    Item 5: Motion data does not meet minimum requirements (INSUFFICIENT_DATA).
+    With a validated normal route, this is partial availability (clean missing sensor data),
+    yielding NORMAL with reduced confidence (0.65).
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.18)
+    motion_res = _make_motion_result(score=None, status="INSUFFICIENT_DATA")
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.NORMAL
+    assert a.recommended_action == RecommendedAction.NONE
+    assert a.confidence == 0.65
+    assert a.risk_vector.route_anomaly == 0.18
+    assert a.risk_vector.kinematic_anomaly is None
+
+
+def test_motion_insufficient_samples_with_insufficient_route_is_unusual():
+    """
+    Item 3 & 5: Motion INSUFFICIENT_DATA + Route INSUFFICIENT_HISTORY.
+    Both modalities lack sufficient data -> all-signals-missing policy applies.
+    Yields UNUSUAL / MONITOR with confidence 0.20.
+    """
+    engine = RiskEngine()
+    route_res = RouteDeviationResult(
+        user_id="usr_test_001",
+        trajectory_id="usr_test_001/trip_1",
+        status="INSUFFICIENT_HISTORY",
+        raw_distance_meters=None,
+        route_deviation_score=None,
+        reference_trajectory_count=2,
+        closest_reference_id=None,
+    )
+    motion_res = _make_motion_result(score=None, status="INSUFFICIENT_DATA")
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence == 0.20
+    assert a.risk_vector.route_anomaly is None
+    assert a.risk_vector.kinematic_anomaly is None
 
 
 def test_missing_all_signals_yields_unusual_not_normal():
@@ -987,3 +1097,330 @@ def test_motion_detector_none_confidence_fallback():
         "usr_test_001", route_result=route_anom, motion_result=motion_none_conf
     )
     assert a_co.confidence == (0.85 + 0.80) / 2.0
+
+
+# ---------------------------------------------------------------------------
+# Section 7 — Detector failure / corrupted-input regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_route_computation_error_with_normal_motion_never_yields_normal():
+    """
+    Regression: Route detector reports COMPUTATION_ERROR (score=None) while
+    motion detector reports validated normal (score < threshold).
+    Engine must NEVER produce NORMAL because a failed detector does not
+    constitute a validated normal observation.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(
+        score=None,
+        distance_meters=None,
+        status="COMPUTATION_ERROR",
+    )
+    motion_res = _make_motion_result(score=0.15, motion_state="walking")
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL, (
+        "Route COMPUTATION_ERROR + normal motion must yield UNUSUAL, not NORMAL. "
+        "A failed detector is not a validated normal observation."
+    )
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
+    assert a.risk_vector.route_anomaly is None
+    assert a.risk_vector.kinematic_anomaly == 0.15
+    assert a.telemetry_summary.route_status == "COMPUTATION_ERROR"
+    assert a.telemetry_summary.motion_status == "SUCCESS"
+
+
+def test_motion_invalid_data_with_normal_route_never_yields_normal():
+    """
+    Regression: Motion detector reports INVALID_DATA (score=None) while
+    route detector reports validated normal (score < threshold).
+    Engine must NEVER produce NORMAL because a failed detector does not
+    constitute a validated normal observation.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.20, distance_meters=50.0)
+    motion_res = _make_motion_result(
+        score=None,
+        status="INVALID_DATA",
+        motion_state="unknown",
+    )
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL, (
+        "Normal route + motion INVALID_DATA must yield UNUSUAL, not NORMAL. "
+        "A failed detector is not a validated normal observation."
+    )
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence <= 0.40
+    assert a.risk_vector.route_anomaly == 0.20
+    assert a.risk_vector.kinematic_anomaly is None
+    assert a.telemetry_summary.motion_status == "INVALID_DATA"
+    assert a.telemetry_summary.route_status == "SUCCESS"
+
+
+def test_both_detectors_failed_yields_unusual_not_normal():
+    """
+    Both detectors report failure statuses (COMPUTATION_ERROR + INVALID_DATA).
+    Both scores are None. This falls into the all-signals-missing branch.
+    Must yield UNUSUAL / MONITOR with confidence 0.20.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(
+        score=None, distance_meters=None, status="COMPUTATION_ERROR"
+    )
+    motion_res = _make_motion_result(
+        score=None, status="INVALID_DATA", motion_state="unknown"
+    )
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert a.confidence == 0.20
+    assert a.risk_vector.route_anomaly is None
+    assert a.risk_vector.kinematic_anomaly is None
+
+
+def test_anomalous_route_with_motion_failure_escalates_to_unusual():
+    """
+    Route is anomalous (score >= threshold) while motion detector failed.
+    The anomalous signal takes precedence through the single-anomaly branch.
+    Must yield UNUSUAL / MONITOR, never NORMAL or ELEVATED.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.75, distance_meters=200.0)
+    motion_res = _make_motion_result(
+        score=None, status="INVALID_DATA", motion_state="unknown"
+    )
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert SIGNAL_ROUTE_DEVIATION in a.signals
+    assert a.risk_vector.route_anomaly == 0.75
+    assert a.risk_vector.kinematic_anomaly is None
+
+
+def test_anomalous_motion_with_route_failure_escalates_to_unusual():
+    """
+    Motion is anomalous (score >= threshold) while route detector failed.
+    The anomalous signal takes precedence through the single-anomaly branch.
+    Must yield UNUSUAL / MONITOR, never NORMAL or ELEVATED.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(
+        score=None, distance_meters=None, status="COMPUTATION_ERROR"
+    )
+    motion_res = _make_motion_result(score=0.70, motion_state="abrupt_motion")
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.UNUSUAL
+    assert a.recommended_action == RecommendedAction.MONITOR
+    assert SIGNAL_UNUSUAL_MOTION in a.signals
+    assert a.risk_vector.kinematic_anomaly == 0.70
+    assert a.risk_vector.route_anomaly is None
+
+
+# ---------------------------------------------------------------------------
+# Section 8 — Terminal trip-state mapping regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_normal_assessment_maps_correctly_to_risk_level():
+    """
+    Verify that a dual-normal assessment produces NORMAL with high confidence.
+    This is the only path that could eventually map to COMPLETED_NORMAL
+    when full inference coverage tracking is implemented.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.10)
+    motion_res = _make_motion_result(score=0.05)
+
+    a = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=route_res,
+        motion_result=motion_res,
+    )
+
+    assert a.risk_level == RiskLevel.NORMAL
+    assert a.recommended_action == RecommendedAction.NONE
+    assert a.confidence == 0.88
+    assert len(a.signals) == 0
+
+
+def test_assessment_with_signals_always_has_nonempty_signals_tuple():
+    """
+    When an anomaly is detected, the signals tuple must contain
+    the corresponding authoritative signal identifier.
+    """
+    engine = RiskEngine()
+
+    # Route anomaly
+    a_route = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=_make_route_result(score=0.70),
+        motion_result=_make_motion_result(score=0.10),
+    )
+    assert SIGNAL_ROUTE_DEVIATION in a_route.signals
+    assert SIGNAL_UNUSUAL_MOTION not in a_route.signals
+
+    # Motion anomaly
+    a_motion = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=_make_route_result(score=0.10),
+        motion_result=_make_motion_result(score=0.70),
+    )
+    assert SIGNAL_UNUSUAL_MOTION in a_motion.signals
+    assert SIGNAL_ROUTE_DEVIATION not in a_motion.signals
+
+    # Both anomalous
+    a_both = engine.evaluate(
+        user_id="usr_test_001",
+        route_result=_make_route_result(score=0.70),
+        motion_result=_make_motion_result(score=0.70),
+    )
+    assert set(a_both.signals) == {SIGNAL_ROUTE_DEVIATION, SIGNAL_UNUSUAL_MOTION}
+
+
+# ---------------------------------------------------------------------------
+# Section 9 — Edge case and input sanitization regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_score_of_zero_is_preserved_and_not_confused_with_none():
+    """
+    Item 15: A valid observation has a score of zero.
+    Must NOT be confused with None. Both modalities 0.0 -> NORMAL with confidence 0.88.
+    Raw score and calibrated score must be 0.0, not None.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.0, distance_meters=0.0)
+    motion_res = _make_motion_result(score=0.0, motion_state="still")
+
+    a = engine.evaluate(
+        user_id="usr_test_zero",
+        route_result=route_res,
+        motion_result=motion_res,
+        speed_mps=0.0,
+    )
+
+    assert a.risk_level == RiskLevel.NORMAL
+    assert a.recommended_action == RecommendedAction.NONE
+    assert a.confidence == 0.88
+    assert a.risk_vector.route_anomaly == 0.0
+    assert a.risk_vector.kinematic_anomaly == 0.0
+    assert a.calibration_metadata.raw_score == 0.0
+    assert a.calibration_metadata.calibrated_score == 0.0
+    assert a.telemetry_summary.speed_mps == 0.0
+
+
+def test_non_finite_or_out_of_bounds_detector_score_handled_safely():
+    """
+    Item 16: A detector returns an extreme or non-finite score (NaN, Inf, > 1.0).
+    Must not crash RiskVector construction with unhandled ValueError;
+    must be sanitized to None and treated as a detector failure (UNUSUAL / MONITOR).
+    """
+    engine = RiskEngine()
+
+    for invalid_val in [float("nan"), float("inf"), float("-inf"), 1.5, -0.1]:
+        # Case A: Route detector returns invalid score despite status=SUCCESS
+        route_bad = _make_route_result(score=invalid_val)
+        motion_ok = _make_motion_result(score=0.10)
+
+        a_route = engine.evaluate(
+            user_id="usr_test_nan",
+            route_result=route_bad,
+            motion_result=motion_ok,
+        )
+        assert a_route.risk_level == RiskLevel.UNUSUAL
+        assert a_route.recommended_action == RecommendedAction.MONITOR
+        assert a_route.risk_vector.route_anomaly is None
+        assert a_route.risk_vector.kinematic_anomaly == 0.10
+
+        # Case B: Motion detector returns invalid score despite status=SUCCESS
+        route_ok = _make_route_result(score=0.10)
+        motion_bad = _make_motion_result(score=invalid_val)
+
+        a_motion = engine.evaluate(
+            user_id="usr_test_nan",
+            route_result=route_ok,
+            motion_result=motion_bad,
+        )
+        assert a_motion.risk_level == RiskLevel.UNUSUAL
+        assert a_motion.recommended_action == RecommendedAction.MONITOR
+        assert a_motion.risk_vector.kinematic_anomaly is None
+        assert a_motion.risk_vector.route_anomaly == 0.10
+
+
+def test_speed_mps_sanitization():
+    """
+    Negative, NaN, inf, or non-numeric speed values are sanitized to None.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.10)
+    motion_res = _make_motion_result(score=0.10)
+
+    for bad_speed in [-1.0, float("nan"), float("inf"), "fast", True]:
+        a = engine.evaluate(
+            user_id="usr_test_speed",
+            route_result=route_res,
+            motion_result=motion_res,
+            speed_mps=bad_speed,  # type: ignore
+        )
+        assert a.telemetry_summary.speed_mps is None
+
+
+def test_repeated_evaluation_is_strictly_deterministic():
+    """
+    Item 18: Evaluating identical inputs repeatedly produces identical results.
+    """
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.25, distance_meters=60.0)
+    motion_res = _make_motion_result(score=0.20, motion_state="walking")
+
+    res1 = engine.evaluate(
+        user_id="usr_test_det",
+        route_result=route_res,
+        motion_result=motion_res,
+        speed_mps=1.4,
+    )
+    res2 = engine.evaluate(
+        user_id="usr_test_det",
+        route_result=route_res,
+        motion_result=motion_res,
+        speed_mps=1.4,
+    )
+
+    assert res1.risk_level == res2.risk_level
+    assert res1.confidence == res2.confidence
+    assert res1.signals == res2.signals
+    assert res1.recommended_action == res2.recommended_action
+    assert res1.risk_vector == res2.risk_vector
+    assert res1.telemetry_summary.speed_mps == res2.telemetry_summary.speed_mps
+    assert res1.calibration_metadata == res2.calibration_metadata
