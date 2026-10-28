@@ -481,6 +481,83 @@ def test_detector_exception_propagates_when_configured():
         )
 
 
+def test_motion_detector_exception_with_valid_normal_route_does_not_manufacture_normal():
+    """Area 7: When motion detector crashes but route is normal, engine must NEVER yield NORMAL."""
+    mock_detector = MagicMock(spec=MotionAnomalyDetector)
+    mock_detector.min_samples = 2
+    mock_detector.evaluate_window.side_effect = RuntimeError("Kernel crash in motion pipeline")
+
+    service = RiskService(motion_detector=mock_detector, raise_on_detector_error=False)
+    t0 = BASE_TIME
+    records = [
+        _make_record(
+            timestamp=t0 + timedelta(milliseconds=i * 500),
+            latitude=28.6139 + (i * 0.0001),
+            longitude=77.2090 + (i * 0.0001),
+            rec_id=i,
+        )
+        for i in range(10)
+    ]
+    # Build 5 identical historical trajectories so route scoring produces a normal score
+    history = [
+        _make_trajectory(
+            user_id=TEST_USER_ID,
+            trajectory_id=f"hist_{h}",
+            start_time=t0 - timedelta(days=h + 1),
+            point_count=10,
+        )
+        for h in range(5)
+    ]
+
+    assessment = service.evaluate_telemetry(
+        user_id=TEST_USER_ID,
+        records=records,
+        trajectory_id="candidate_trip",
+        historical_trajectories=history,
+    )
+
+    # Must escalate to UNUSUAL / MONITOR, never NORMAL
+    assert assessment.risk_level == RiskLevel.UNUSUAL
+    assert assessment.recommended_action == RecommendedAction.MONITOR
+    assert assessment.risk_vector.kinematic_anomaly is None
+    assert assessment.risk_vector.route_anomaly is not None
+    assert assessment.telemetry_summary.motion_status == "INVALID_DATA"
+    assert assessment.telemetry_summary.route_status == "SUCCESS"
+
+
+def test_route_detector_exception_with_valid_normal_motion_does_not_manufacture_normal():
+    """Area 7: When route evaluation crashes but motion is normal, engine must NEVER yield NORMAL."""
+    service = RiskService(raise_on_detector_error=False)
+    t0 = BASE_TIME
+    records = [
+        _make_record(
+            timestamp=t0 + timedelta(milliseconds=i * 50),
+            latitude=28.6139 + (i * 0.0001),
+            longitude=77.2090 + (i * 0.0001),
+            rec_id=i,
+        )
+        for i in range(10)
+    ]
+
+    # Injecting invalid historical trajectory that causes scoring/reference exception
+    corrupted_history = MagicMock()
+    corrupted_history.__iter__.side_effect = RuntimeError("Corrupted reference set")
+
+    assessment = service.evaluate_telemetry(
+        user_id=TEST_USER_ID,
+        records=records,
+        trajectory_id="candidate_trip",
+        historical_trajectories=corrupted_history,
+    )
+
+    # Must escalate to UNUSUAL / MONITOR, never NORMAL
+    assert assessment.risk_level == RiskLevel.UNUSUAL
+    assert assessment.recommended_action == RecommendedAction.MONITOR
+    assert assessment.risk_vector.route_anomaly is None
+    assert assessment.risk_vector.kinematic_anomaly is not None
+    assert assessment.telemetry_summary.route_status == "COMPUTATION_ERROR"
+
+
 # ---------------------------------------------------------------------------
 # 8. Raw Device Identifier Privacy Tests
 # ---------------------------------------------------------------------------
