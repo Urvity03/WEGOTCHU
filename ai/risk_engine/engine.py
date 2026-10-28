@@ -216,19 +216,14 @@ class RiskEngine:
         has_motion = motion_score is not None
 
         # Check for detector failures or corrupted inputs
-        route_failure = (
-            route_invalid
-            or (
-                route_result is not None
-                and route_result.status in ("COMPUTATION_ERROR", "INVALID_INPUT", "ERROR", "FAILED")
-            )
+        route_failure = route_invalid or (
+            route_result is not None
+            and route_result.status
+            in ("COMPUTATION_ERROR", "INVALID_INPUT", "ERROR", "FAILED")
         )
-        motion_failure = (
-            motion_invalid
-            or (
-                motion_result is not None
-                and motion_result.status in ("INVALID_DATA", "ERROR", "FAILED")
-            )
+        motion_failure = motion_invalid or (
+            motion_result is not None
+            and motion_result.status in ("INVALID_DATA", "ERROR", "FAILED")
         )
         has_detector_failure = route_failure or motion_failure
 

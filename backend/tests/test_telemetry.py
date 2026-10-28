@@ -1520,11 +1520,24 @@ def test_direct_coverage_eligibility_policy_semantics():
     ]
 
     # Nominal: should pass
-    assert check_trip_coverage_eligibility(mock_trip, valid_records, nominal_assessment) is True
+    assert (
+        check_trip_coverage_eligibility(mock_trip, valid_records, nominal_assessment)
+        is True
+    )
 
     # 1. Non-active trip rejects
-    inactive_trip = Trip(trip_id="mock-trip", user_id="usr_123", status=TripStatus.INITIALIZED.value, started_at=t0)
-    assert check_trip_coverage_eligibility(inactive_trip, valid_records, nominal_assessment) is False
+    inactive_trip = Trip(
+        trip_id="mock-trip",
+        user_id="usr_123",
+        status=TripStatus.INITIALIZED.value,
+        started_at=t0,
+    )
+    assert (
+        check_trip_coverage_eligibility(
+            inactive_trip, valid_records, nominal_assessment
+        )
+        is False
+    )
 
     # 2. Detector failure in route status rejects
     failed_route_summary = TelemetrySummary(
@@ -1545,7 +1558,12 @@ def test_direct_coverage_eligibility_policy_semantics():
         telemetry_summary=failed_route_summary,
         calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
     )
-    assert check_trip_coverage_eligibility(mock_trip, valid_records, failed_route_assessment) is False
+    assert (
+        check_trip_coverage_eligibility(
+            mock_trip, valid_records, failed_route_assessment
+        )
+        is False
+    )
 
     # 3. Confidence < 0.70 rejects
     low_conf_assessment = RiskAssessment(
@@ -1559,18 +1577,31 @@ def test_direct_coverage_eligibility_policy_semantics():
         telemetry_summary=nominal_summary,
         calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
     )
-    assert check_trip_coverage_eligibility(mock_trip, valid_records, low_conf_assessment) is False
+    assert (
+        check_trip_coverage_eligibility(mock_trip, valid_records, low_conf_assessment)
+        is False
+    )
 
     # 4. Records with invalid latitude (> 90) leaves < 10 valid records
     corrupted_records = list(valid_records)
     for j in range(5):
         corrupted_records[j] = dict(valid_records[j])
         corrupted_records[j]["latitude"] = 999.0
-    assert check_trip_coverage_eligibility(mock_trip, corrupted_records, nominal_assessment) is False
+    assert (
+        check_trip_coverage_eligibility(
+            mock_trip, corrupted_records, nominal_assessment
+        )
+        is False
+    )
 
     # 5. Records with non-numeric IMU leaves < 10 valid records
     corrupted_imu_records = list(valid_records)
     for j in range(5):
         corrupted_imu_records[j] = dict(valid_records[j])
         corrupted_imu_records[j]["accelerometer_y"] = "corrupted"
-    assert check_trip_coverage_eligibility(mock_trip, corrupted_imu_records, nominal_assessment) is False
+    assert (
+        check_trip_coverage_eligibility(
+            mock_trip, corrupted_imu_records, nominal_assessment
+        )
+        is False
+    )

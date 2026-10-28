@@ -128,9 +128,11 @@ def check_trip_coverage_eligibility(
     # Extract distinct, sorted timestamps (normalized to UTC)
     unique_timestamps = sorted(
         {
-            r["timestamp"].replace(tzinfo=timezone.utc)
-            if r["timestamp"].tzinfo is None
-            else r["timestamp"].astimezone(timezone.utc)
+            (
+                r["timestamp"].replace(tzinfo=timezone.utc)
+                if r["timestamp"].tzinfo is None
+                else r["timestamp"].astimezone(timezone.utc)
+            )
             for r in valid_records
         }
     )

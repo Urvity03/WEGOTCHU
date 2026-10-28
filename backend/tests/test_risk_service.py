@@ -485,7 +485,9 @@ def test_motion_detector_exception_with_valid_normal_route_does_not_manufacture_
     """Area 7: When motion detector crashes but route is normal, engine must NEVER yield NORMAL."""
     mock_detector = MagicMock(spec=MotionAnomalyDetector)
     mock_detector.min_samples = 2
-    mock_detector.evaluate_window.side_effect = RuntimeError("Kernel crash in motion pipeline")
+    mock_detector.evaluate_window.side_effect = RuntimeError(
+        "Kernel crash in motion pipeline"
+    )
 
     service = RiskService(motion_detector=mock_detector, raise_on_detector_error=False)
     t0 = BASE_TIME

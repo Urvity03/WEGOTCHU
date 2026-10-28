@@ -85,7 +85,7 @@ No false safety guarantees, uncalibrated danger probabilities, or unverified nor
 3. **Temporal Isolation & Zero Future-Leakage**:
    Candidate trips are excluded from their own historical baseline query, and trips occurring concurrently or in the future (`ended_at >= candidate.started_at`) are excluded. Only verified normal trips of the specific user are used for DTW corridor calculations.
 4. **Multi-Window Trip Completion Coverage Policy**:
-   A trip is only marked `COMPLETED_NORMAL` if it has $\ge 10$ telemetry points, spans $\ge 60$ seconds, contains no observation gaps $> 60$ seconds, encounters zero detector crashes, and presents zero risk escalations across all processed windows. Otherwise, it settles safely into `COMPLETED_UNVERIFIED`.
+   A trip is only marked `COMPLETED_NORMAL` if it has $\ge 10$ telemetry points (`MIN_VERIFIED_TELEMETRY_RECORDS = 10`), spans $\ge 30.0$ seconds (`MIN_VERIFIED_TRIP_DURATION_SECONDS = 30.0`), contains no observation gaps $> 15.0$ seconds (`MAX_PERMITTED_OBSERVATION_GAP_SECONDS = 15.0`), encounters zero detector crashes, and presents zero risk escalations across all processed windows. Otherwise, it settles safely into `COMPLETED_UNVERIFIED`.
 5. **Guardrail-Protected GenAI Safety Briefing**:
    Briefings are generated strictly from verified telemetry and risk records using a deterministic offline service. Any speculative, uncalibrated, or absolute safety claims ("100% safe", "guaranteed danger-free") are rejected by automated guardrail checks.
 
