@@ -73,6 +73,8 @@ class TelemetrySummary:
     corridor_deviation_meters: float | None = None
     motion_state: str = "unknown"
     acoustic_anomaly_score: float | None = None
+    motion_status: str = "UNAVAILABLE"
+    route_status: str = "UNAVAILABLE"
 
 
 @dataclass(frozen=True)
