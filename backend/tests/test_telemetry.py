@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,9 +45,18 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def use_module_test_database():
+    previous_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    if previous_override is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = previous_override
 
 
 # -------------------------------------------------------------------
@@ -599,7 +609,7 @@ def test_complete_trip_valid_lifecycle_transitions():
     assert comp_data["ended_at"] is not None
 
 
-def test_complete_trip_evidenced_anomaly_transitions_to_completed_anomalous():
+def test_client_anomaly_flag_does_not_verify_trip_without_backend_evidence():
     trip_id = "trip-anomalous-complete"
 
     client.post(
@@ -616,8 +626,215 @@ def test_complete_trip_evidenced_anomaly_transitions_to_completed_anomalous():
 
     assert response.status_code == 200
     data = response.json()
-    assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+    assert data["inference_status"] == "INSUFFICIENT_DATA"
+    assert data["risk_assessment"] is None
     assert data["ended_at"] is not None
+
+
+def test_normal_assessment_does_not_verify_trip_without_coverage_tracking():
+    trip_id = "trip-normal-assessment-unverified"
+    sample_time = datetime.now(timezone.utc) - timedelta(seconds=2)
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id, "started_at": sample_time.isoformat()},
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=sample_time + timedelta(seconds=offset),
+                    latitude=28.6139 + offset * 0.0001,
+                    longitude=77.2090 + offset * 0.0001,
+                    accuracy_meters=5.0,
+                    speed_mps=0.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for offset in (0, 1)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["risk_level"] == "NORMAL"
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+
+
+def test_complete_trip_assesses_persisted_window_and_reports_anomaly():
+    trip_id = "trip-persisted-risk-assessment"
+    started_at = datetime(2026, 9, 26, 16, 59, 0, tzinfo=timezone.utc)
+    sample_time = datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc)
+    user_id = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=started_at,
+            status=TripStatus.ACTIVE,
+        )
+        for index in range(5):
+            history_id = f"{trip_id}-history-{index}"
+            history_start = started_at - timedelta(days=5 - index)
+            repo.create_trip(
+                trip_id=history_id,
+                user_id=user_id,
+                started_at=history_start,
+            )
+            repo.update_trip_status(
+                trip_id=history_id,
+                user_id=user_id,
+                new_status=TripStatus.ACTIVE,
+            )
+            repo.update_trip_status(
+                trip_id=history_id,
+                user_id=user_id,
+                new_status=TripStatus.COMPLETED_NORMAL,
+                ended_at=history_start + timedelta(seconds=10),
+            )
+            db.add_all(
+                [
+                    TelemetryRecord(
+                        version="0.1",
+                        device_id=TEST_DEVICE_ID,
+                        trip_id=history_id,
+                        timestamp=history_start + timedelta(seconds=offset),
+                        latitude=28.6139 + index * 0.0001 + offset * 0.00001,
+                        longitude=77.2090 + index * 0.0001 + offset * 0.00001,
+                        accuracy_meters=5.0,
+                        speed_mps=1.0,
+                        accelerometer_x=0.0,
+                        accelerometer_y=9.81,
+                        accelerometer_z=0.0,
+                        battery_level=0.9,
+                        network_status="WIFI",
+                    )
+                    for offset in (0, 10)
+                ]
+            )
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=sample_time + timedelta(seconds=offset),
+                    latitude=28.6139 + offset * 0.0001,
+                    longitude=77.2090 + offset * 0.0001,
+                    accuracy_meters=5.0,
+                    speed_mps=1.0,
+                    accelerometer_x=0.0 if offset == 0 else 60.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for offset in (0, 1)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["user_id"] == user_id
+    assert data["risk_assessment"]["user_id"] != TEST_DEVICE_ID
+    assert "unusual_motion" in data["risk_assessment"]["signals"]
+    assert data["risk_assessment"]["telemetry_summary"]["motion_status"] == "SUCCESS"
+    assert data["risk_assessment"]["telemetry_summary"]["route_status"] == "SUCCESS"
+    assert data["risk_assessment"]["risk_vector"]["route_anomaly"] is not None
+
+
+def test_inference_failure_after_persistence_leaves_trip_unverified():
+    trip_id = "trip-risk-assessment-failure"
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        db.add(
+            TelemetryRecord(
+                version="0.1",
+                device_id=TEST_DEVICE_ID,
+                trip_id=trip_id,
+                timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                latitude=28.6139,
+                longitude=77.2090,
+                accuracy_meters=5.0,
+                accelerometer_x=0.0,
+                accelerometer_y=9.81,
+                accelerometer_z=0.0,
+                battery_level=0.9,
+                network_status="WIFI",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with patch(
+        "backend.app.routers.telemetry.RiskService.evaluate_telemetry",
+        side_effect=RuntimeError("test inference failure"),
+    ):
+        response = client.post(
+            "/api/v1/telemetry/trips/complete",
+            json={"trip_id": trip_id},
+            headers=auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+    assert data["inference_status"] == "FAILED"
+    assert data["risk_assessment"] is None
+
+    db = TestingSessionLocal()
+    try:
+        trip = TripRepository(db).get_trip(trip_id)
+        assert trip is not None
+        assert trip.status == TripStatus.COMPLETED_UNVERIFIED.value
+        assert (
+            db.query(TelemetryRecord).filter(TelemetryRecord.trip_id == trip_id).count()
+            == 1
+        )
+    finally:
+        db.close()
 
 
 def test_complete_trip_crisis_transitions_to_aborted_crisis():
@@ -638,6 +855,7 @@ def test_complete_trip_crisis_transitions_to_aborted_crisis():
     assert response.status_code == 200
     data = response.json()
     assert data["trip_status"] == TripStatus.ABORTED_CRISIS.value
+    assert data["inference_status"] == "SKIPPED_CRISIS"
     assert data["ended_at"] is not None
 
 
@@ -666,6 +884,7 @@ def test_complete_trip_repeated_requests_idempotent():
     )
     assert res2.status_code == 200
     assert res2.json()["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+    assert res2.json()["inference_status"] == "NOT_RUN"
     assert res1.json()["ended_at"] == res2.json()["ended_at"]
 
 
@@ -696,14 +915,14 @@ def test_complete_trip_cannot_reopen_or_alter_terminal_state():
     assert res2.status_code == 409
     assert "already finalized" in res2.json()["detail"].lower()
 
-    # Attempt to alter to COMPLETED_ANOMALOUS -> 409 Conflict
+    # A client-provided anomaly flag is not verification evidence.
     res_alter = client.post(
         "/api/v1/telemetry/trips/complete",
         json={"trip_id": trip_id, "anomalous": True},
         headers=auth_headers(),
     )
-    assert res_alter.status_code == 409
-    assert "already finalized" in res_alter.json()["detail"].lower()
+    assert res_alter.status_code == 200
+    assert res_alter.json()["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
 
     # Attempt to stream telemetry to finalized trip -> 409 Conflict
     telem_payload = valid_payload()
@@ -780,3 +999,578 @@ def test_confirmation_raw_device_id_never_used_as_ml_user_identity():
         assert trip.user_id.startswith("usr_")
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# GenAI Briefing Endpoint & Multi-Window Coverage Policy Tests
+# ---------------------------------------------------------------------------
+
+
+def test_trip_briefing_successful_and_guardrail_verified():
+    trip_id = "trip-genai-briefing-success"
+
+    client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    db = TestingSessionLocal()
+    try:
+        t0 = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=i * 2),
+                    latitude=28.6139 + (i * 0.0001),
+                    longitude=77.2090 + (i * 0.0001),
+                    accuracy_meters=4.0,
+                    speed_mps=1.2,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.1,
+                    battery_level=0.85,
+                    network_status="WIFI",
+                )
+                for i in range(5)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/api/v1/telemetry/trips/{trip_id}/briefing",
+        json={"audience": "USER", "user_display_name": "Alice"},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["risk_level"] in ("NORMAL", "UNUSUAL")
+    assert data["audience"] == "USER"
+    assert "Alice" in data["summary"]
+    assert "acoustic" in data["missing_evidence"]
+    assert data["source"] == "deterministic_template"
+    assert len(data["limitations_disclaimer"]) > 0
+
+
+def test_trip_briefing_cross_user_rejected_403():
+    trip_id = "trip-genai-cross-user"
+
+    client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers("device_owner_a"),
+    )
+
+    # User B requests User A's briefing -> 403 Forbidden
+    response = client.post(
+        f"/api/v1/telemetry/trips/{trip_id}/briefing",
+        headers=auth_headers("device_intruder_b"),
+    )
+    assert response.status_code == 403
+    assert "does not belong to authenticated user" in response.json()["detail"]
+
+
+def test_trip_briefing_unknown_trip_returns_404():
+    response = client.post(
+        "/api/v1/telemetry/trips/trip-nonexistent-999/briefing",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+def test_trip_briefing_missing_authentication_rejected_401():
+    response = client.post(
+        "/api/v1/telemetry/trips/trip-any/briefing",
+    )
+    assert response.status_code == 401
+
+
+def test_trip_briefing_trusted_contact_audience():
+    trip_id = "trip-genai-trusted-contact"
+
+    client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    response = client.post(
+        f"/api/v1/telemetry/trips/{trip_id}/briefing",
+        json={"audience": "TRUSTED_CONTACT", "user_display_name": "Bob"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["audience"] == "TRUSTED_CONTACT"
+    assert "Bob" in data["headline"] or "Bob" in data["summary"]
+
+
+def test_complete_trip_with_sufficient_multi_window_coverage_becomes_completed_normal():
+    """
+    When an active trip has:
+    1. >= 10 records
+    2. Duration >= 30 seconds
+    3. >= 5 historical COMPLETED_NORMAL reference trips
+    4. Valid normal motion (SUCCESS) and valid normal route (SUCCESS)
+    The trip satisfies multi-window coverage and transitions to COMPLETED_NORMAL.
+    """
+    trip_id = "trip-full-coverage-normal"
+    user_id = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
+    t0 = datetime(2026, 10, 20, 10, 0, 0, tzinfo=timezone.utc)
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        # Create 5 historical COMPLETED_NORMAL trips along the identical corridor
+        for h in range(5):
+            hist_id = f"{trip_id}-hist-{h}"
+            hist_start = t0 - timedelta(days=5 - h)
+            repo.create_trip(
+                trip_id=hist_id,
+                user_id=user_id,
+                started_at=hist_start,
+                status=TripStatus.INITIALIZED,
+            )
+            repo.update_trip_status(
+                trip_id=hist_id,
+                user_id=user_id,
+                new_status=TripStatus.ACTIVE,
+            )
+            repo.update_trip_status(
+                trip_id=hist_id,
+                user_id=user_id,
+                new_status=TripStatus.COMPLETED_NORMAL,
+                ended_at=hist_start + timedelta(seconds=60),
+            )
+            # Add trajectory observations for the historical trip
+            db.add_all(
+                [
+                    TelemetryRecord(
+                        version="0.1",
+                        device_id=TEST_DEVICE_ID,
+                        trip_id=hist_id,
+                        timestamp=hist_start + timedelta(seconds=i * 5),
+                        latitude=28.6139 + (i * 0.0001),
+                        longitude=77.2090 + (i * 0.0001),
+                        accuracy_meters=4.0,
+                        speed_mps=1.2,
+                        accelerometer_x=0.0,
+                        accelerometer_y=9.81,
+                        accelerometer_z=0.05,
+                        battery_level=0.9,
+                        network_status="WIFI",
+                    )
+                    for i in range(12)
+                ]
+            )
+
+        # Start the active candidate trip
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=t0,
+            status=TripStatus.ACTIVE,
+        )
+
+        # Add 12 records spanning 55 seconds (exceeding min_records=10 and min_duration=30s)
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=i * 5),
+                    latitude=28.6139 + (i * 0.0001),
+                    longitude=77.2090 + (i * 0.0001),
+                    accuracy_meters=4.0,
+                    speed_mps=1.2,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.05,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for i in range(12)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    # Complete trip
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["risk_level"] == "NORMAL"
+    assert len(data["risk_assessment"]["signals"]) == 0
+    # Multi-window coverage satisfied -> transitions to COMPLETED_NORMAL
+    assert data["trip_status"] == TripStatus.COMPLETED_NORMAL.value
+
+
+def test_complete_trip_with_insufficient_duration_remains_completed_unverified():
+    """
+    Trip has 12 records matching historical corridor perfectly, but duration
+    is only 22 seconds (< 30.0s).
+    Coverage is not satisfied -> remains COMPLETED_UNVERIFIED.
+    """
+    trip_id = "trip-short-duration-unverified"
+    user_id = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
+    t0 = datetime(2026, 10, 20, 11, 0, 0, tzinfo=timezone.utc)
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=t0,
+            status=TripStatus.ACTIVE,
+        )
+        # 12 records spaced by 2 seconds -> duration = 22 seconds (< 30s)
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=i * 2),
+                    latitude=28.6139 + (i * 0.0001),
+                    longitude=77.2090 + (i * 0.0001),
+                    accuracy_meters=4.0,
+                    speed_mps=1.2,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.05,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for i in range(12)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["risk_level"] == "NORMAL"
+    assert len(data["risk_assessment"]["signals"]) == 0
+    # Unverified coverage -> remains COMPLETED_UNVERIFIED
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+
+
+def test_coverage_rejected_when_observation_gap_exceeds_threshold():
+    """
+    Trip has 12 valid records and spans 50 seconds (> 30s), but contains
+    a 20-second gap between observations (> MAX_PERMITTED_OBSERVATION_GAP_SECONDS=15s).
+    Coverage is not satisfied -> remains COMPLETED_UNVERIFIED.
+    """
+    trip_id = "trip-gap-exceeded-unverified"
+    user_id = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
+    t0 = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Offsets in seconds with a 20s gap between 12s and 32s
+    offsets = [0, 3, 6, 9, 12, 32, 35, 38, 41, 44, 47, 50]
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=t0,
+            status=TripStatus.ACTIVE,
+        )
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=offsets[i]),
+                    latitude=28.6139 + (i * 0.0001),
+                    longitude=77.2090 + (i * 0.0001),
+                    accuracy_meters=4.0,
+                    speed_mps=1.2,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.05,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for i in range(12)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    # Gap exceeded -> remains COMPLETED_UNVERIFIED
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+
+
+def test_coverage_rejected_for_clustered_observations():
+    """
+    Trip has 12 records along the valid historical corridor, but contains a 30-second
+    observation gap between observation 10 (at 30s) and observation 11 (at 60s).
+    Total duration is 60 seconds, but the gap exceeds MAX_PERMITTED_OBSERVATION_GAP_SECONDS (15s).
+    Coverage is not satisfied -> remains COMPLETED_UNVERIFIED.
+    """
+    trip_id = "trip-clustered-unverified"
+    user_id = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
+    t0 = datetime(2026, 10, 20, 13, 0, 0, tzinfo=timezone.utc)
+
+    # 11 records spaced by 3s (0s to 30s), then 12th record at 60s (30s gap)
+    offsets = [i * 3 for i in range(11)] + [60]
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=t0,
+            status=TripStatus.ACTIVE,
+        )
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=offsets[i]),
+                    latitude=28.6139 + (i * 0.0001),
+                    longitude=77.2090 + (i * 0.0001),
+                    accuracy_meters=4.0,
+                    speed_mps=1.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.05,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for i in range(12)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["risk_level"] == "NORMAL"
+    assert len(data["risk_assessment"]["signals"]) == 0
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+
+
+def test_coverage_rejected_when_timestamps_are_duplicate():
+    """
+    Trip has 12 records spanning 35 seconds, but duplicate timestamps leave
+    only 6 distinct observation moments (< MIN_VERIFIED_TELEMETRY_RECORDS=10).
+    Coverage is not satisfied -> remains COMPLETED_UNVERIFIED.
+    """
+    trip_id = "trip-duplicate-ts-unverified"
+    device_id = "device_dup_ts_test"
+    user_id = pseudonymize_identifier(device_id, SECRET_KEY)
+    t0 = datetime(2026, 10, 20, 14, 0, 0, tzinfo=timezone.utc)
+
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        repo.create_trip(
+            trip_id=trip_id,
+            user_id=user_id,
+            started_at=t0,
+            status=TripStatus.ACTIVE,
+        )
+        # 12 records but only 6 unique timestamps (2 records per timestamp)
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=device_id,
+                    trip_id=trip_id,
+                    timestamp=t0 + timedelta(seconds=(i // 2) * 6),
+                    latitude=28.6139 + (i * 0.00005),
+                    longitude=77.2090 + (i * 0.00005),
+                    accuracy_meters=4.0,
+                    speed_mps=1.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.05,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                )
+                for i in range(12)
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={"trip_id": trip_id},
+        headers=auth_headers(device_id),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["inference_status"] == "COMPLETED"
+    assert data["risk_assessment"]["risk_level"] == "NORMAL"
+    assert len(data["risk_assessment"]["signals"]) == 0
+    assert data["trip_status"] == TripStatus.COMPLETED_UNVERIFIED.value
+
+
+def test_direct_coverage_eligibility_policy_semantics():
+    """
+    Unit test verify check_trip_coverage_eligibility directly across edge cases:
+    - Non-active trip
+    - Detector failure
+    - Low confidence
+    - Corrupted coordinate values
+    - Non-numeric IMU values
+    """
+    from backend.app.models.trip import Trip
+    from backend.app.routers.telemetry import check_trip_coverage_eligibility
+    from ai.risk_engine.models import (
+        RiskAssessment,
+        RiskLevel,
+        RecommendedAction,
+        RiskVector,
+        TelemetrySummary,
+        CalibrationMetadata,
+    )
+
+    t0 = datetime(2026, 10, 20, 15, 0, 0, tzinfo=timezone.utc)
+
+    mock_trip = Trip(
+        trip_id="mock-trip",
+        user_id="usr_123",
+        status=TripStatus.ACTIVE.value,
+        started_at=t0,
+    )
+
+    nominal_summary = TelemetrySummary(
+        speed_mps=1.0,
+        corridor_deviation_meters=0.0,
+        motion_state="still",
+        motion_status="SUCCESS",
+        route_status="SUCCESS",
+    )
+
+    nominal_assessment = RiskAssessment(
+        user_id="usr_123",
+        risk_level=RiskLevel.NORMAL,
+        confidence=0.88,
+        signals=(),
+        location_status="available",
+        recommended_action=RecommendedAction.NONE,
+        risk_vector=RiskVector(kinematic_anomaly=0.0, route_anomaly=0.0),
+        telemetry_summary=nominal_summary,
+        calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
+    )
+
+    valid_records = [
+        {
+            "timestamp": t0 + timedelta(seconds=i * 4),
+            "latitude": 28.6139,
+            "longitude": 77.2090,
+            "accelerometer_x": 0.0,
+            "accelerometer_y": 9.81,
+            "accelerometer_z": 0.0,
+        }
+        for i in range(11)  # 11 records spanning 40s with 4s gaps
+    ]
+
+    # Nominal: should pass
+    assert check_trip_coverage_eligibility(mock_trip, valid_records, nominal_assessment) is True
+
+    # 1. Non-active trip rejects
+    inactive_trip = Trip(trip_id="mock-trip", user_id="usr_123", status=TripStatus.INITIALIZED.value, started_at=t0)
+    assert check_trip_coverage_eligibility(inactive_trip, valid_records, nominal_assessment) is False
+
+    # 2. Detector failure in route status rejects
+    failed_route_summary = TelemetrySummary(
+        speed_mps=1.0,
+        corridor_deviation_meters=None,
+        motion_state="still",
+        motion_status="SUCCESS",
+        route_status="COMPUTATION_ERROR",
+    )
+    failed_route_assessment = RiskAssessment(
+        user_id="usr_123",
+        risk_level=RiskLevel.UNUSUAL,
+        confidence=0.35,
+        signals=(),
+        location_status="unavailable",
+        recommended_action=RecommendedAction.MONITOR,
+        risk_vector=RiskVector(),
+        telemetry_summary=failed_route_summary,
+        calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
+    )
+    assert check_trip_coverage_eligibility(mock_trip, valid_records, failed_route_assessment) is False
+
+    # 3. Confidence < 0.70 rejects
+    low_conf_assessment = RiskAssessment(
+        user_id="usr_123",
+        risk_level=RiskLevel.NORMAL,
+        confidence=0.65,  # e.g. clean partial availability
+        signals=(),
+        location_status="available",
+        recommended_action=RecommendedAction.NONE,
+        risk_vector=RiskVector(kinematic_anomaly=0.0),
+        telemetry_summary=nominal_summary,
+        calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
+    )
+    assert check_trip_coverage_eligibility(mock_trip, valid_records, low_conf_assessment) is False
+
+    # 4. Records with invalid latitude (> 90) leaves < 10 valid records
+    corrupted_records = list(valid_records)
+    for j in range(5):
+        corrupted_records[j] = dict(valid_records[j])
+        corrupted_records[j]["latitude"] = 999.0
+    assert check_trip_coverage_eligibility(mock_trip, corrupted_records, nominal_assessment) is False
+
+    # 5. Records with non-numeric IMU leaves < 10 valid records
+    corrupted_imu_records = list(valid_records)
+    for j in range(5):
+        corrupted_imu_records[j] = dict(valid_records[j])
+        corrupted_imu_records[j]["accelerometer_y"] = "corrupted"
+    assert check_trip_coverage_eligibility(mock_trip, corrupted_imu_records, nominal_assessment) is False
