@@ -12,17 +12,27 @@ This document defines the telemetry contract between the Android mobile client a
 
 ## 2. Data Flow
 
+`	ext
 Android Mobile App
         |
-        | Mobile Telemetry
+        | Mobile Telemetry (Streaming Ingestion)
         v
-POST /api/v1/telemetry
+POST /api/v1/telemetry (Validation & Persistence)
         |
         v
-FastAPI Backend
+PostgreSQL / SQLite (telemetry_records)
         |
+        | On Trip Completion (POST /api/v1/telemetry/trips/complete)
         v
-AI Risk Engine
+RiskService & Deterministic RiskEngine (Synchronous Completion Verification)
+`
+
+Note: The backend currently persists incoming telemetry frames without executing
+live streaming inference. Risk assessment is executed synchronously upon trip
+completion. Experimental research modules (i/multimodal_fusion/,
+i/temporal_model/, and i/genai/) are not connected to the active
+production pipeline. Score values and confidence levels represent deterministic
+heuristic indices, not calibrated danger probabilities.
 
 ## 3. Mobile Telemetry Payload
 
@@ -199,7 +209,7 @@ The FastAPI backend is responsible for:
 1. Receiving telemetry through POST /api/v1/telemetry.
 2. Validating the payload.
 3. Rejecting malformed telemetry.
-4. Forwarding valid telemetry to the appropriate downstream AI component.
+4. Persisting valid telemetry for its identified trip.
 5. Applying authentication and security controls.
 6. Avoiding unnecessary persistent storage of raw personal telemetry.
 
@@ -212,10 +222,23 @@ idempotent.
 
 Clients may finalize a trip with `POST /api/v1/telemetry/trips/complete`,
 providing `trip_id` and optionally `ended_at`. Ordinary completion results in
-`COMPLETED_UNVERIFIED`; an explicit crisis flag results in `ABORTED_CRISIS`,
-and an anomaly flag results in `COMPLETED_ANOMALOUS`. Finalized trips cannot
-be reopened or accept further telemetry. A trip ID is scoped to its
-authenticated owner.
+an inference over the trip's persisted telemetry and eligible same-user,
+chronologically earlier `COMPLETED_NORMAL` trips. Inference is run once at
+completion, not on individual telemetry frames. The response includes
+`inference_status` (`COMPLETED`, `INSUFFICIENT_DATA`, `FAILED`,
+`SKIPPED_CRISIS`, or `NOT_RUN`) and a `risk_assessment` only when inference
+completed. The extended assessment reports motion and route evaluation status,
+including `INSUFFICIENT_HISTORY`.
+
+Observed anomaly signals may result in `COMPLETED_ANOMALOUS`. Otherwise, a trip
+remains `COMPLETED_UNVERIFIED`: the current API does not track expected telemetry
+windows or prove complete inference coverage, so it never infers
+`COMPLETED_NORMAL` from absent or incomplete evidence. Legacy client-provided
+anomaly flags are accepted for compatibility but do not establish anomaly
+evidence. An explicit crisis flag results in `ABORTED_CRISIS` and skips ML
+assessment. Inference failures are reported separately from telemetry
+persistence and leave the trip unverified. Finalized trips cannot be reopened
+or accept further telemetry. A trip ID is scoped to its authenticated owner.
 
 ## 8. Mobile Responsibility
 
@@ -238,7 +261,9 @@ The project requires:
 - Backend risk evaluation target below 250 ms.
 - Active Safety Mode battery consumption below 2.5% per hour.
 
-The backend should support efficient telemetry ingestion without unnecessary processing or storage.
+Telemetry ingestion persists each frame without running inference. Completion
+currently performs synchronous trip-level inference; its latency for long trips
+and large reference histories has not been measured against the 250 ms target.
 
 ## 10. Contract Compatibility
 
