@@ -1,11 +1,4 @@
-import os
-import sys
-
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-ci-only-32-bytes")
-
-sys.path.insert(0, ".")
-
-os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key")
+import pytest
 
 from backend.app.auth import create_access_token
 from fastapi.testclient import TestClient
@@ -16,7 +9,6 @@ from sqlalchemy.pool import StaticPool
 from backend.app.database import Base, get_db
 from backend.app.main import app
 from backend.app.models.telemetry_record import TelemetryRecord  # noqa: F401
-
 
 TEST_DATABASE_URL = "sqlite://"
 
@@ -43,10 +35,19 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-
 client = TestClient(app)
 TEST_TOKEN = create_access_token("usr_dev_test")
+
+
+@pytest.fixture(autouse=True)
+def use_module_test_database():
+    previous_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    if previous_override is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = previous_override
 
 
 def test_status():
