@@ -1,6 +1,12 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+TripId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+]
 
 
 class Location(BaseModel):
@@ -33,3 +39,4 @@ class TelemetryPayload(BaseModel):
     gyroscope: Gyroscope | None = None
     battery_level: float = Field(ge=0.0, le=1.0)
     network_status: str
+    trip_id: TripId | None = None
