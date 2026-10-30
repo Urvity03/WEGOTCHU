@@ -411,4 +411,3 @@ Confirm that:
 - The demo commands are documented.
 - The route-deviation score is described as an unusualness indicator, not a
   danger probability.
-  
