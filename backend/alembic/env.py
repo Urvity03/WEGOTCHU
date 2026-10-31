@@ -24,6 +24,7 @@ from backend.app.database import Base  # noqa: E402
 from backend.app.models.telemetry_record import TelemetryRecord  # noqa: E402, F401
 from backend.app.models.trip import Trip  # noqa: E402, F401
 from backend.app.models.sos_alert import SOSAlert  # noqa: E402, F401
+
 # Metadata used by Alembic for autogenerate
 target_metadata = Base.metadata
 
