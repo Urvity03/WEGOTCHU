@@ -55,6 +55,7 @@ class LocationCollector(
             permissionChecker(Manifest.permission.ACCESS_COARSE_LOCATION)
 
         if (!fineLocationGranted && !coarseLocationGranted) {
+            latestLocation = null
             Log.e("LocationCollector", "Location permission is not granted")
             return
         }

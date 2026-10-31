@@ -233,6 +233,7 @@ def receive_telemetry(
         raise
     except Exception as exc:
         db.rollback()
+        logger.exception("Failed to persist telemetry record")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to persist telemetry record",
@@ -275,20 +276,15 @@ def start_trip(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
     except HTTPException:
         raise
     except Exception as exc:
         db.rollback()
+        logger.exception("Failed to create trip")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create trip",
         ) from exc
-
     return {
         "status": "accepted",
         "trip_id": trip.trip_id,
@@ -419,10 +415,16 @@ def complete_trip(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     except HTTPException:
         raise
     except Exception as exc:
         db.rollback()
+        logger.exception("Failed to complete trip")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to complete trip",
