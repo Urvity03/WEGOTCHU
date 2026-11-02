@@ -1,32 +1,28 @@
-"""Personalized historical reference set builder for WEGOTCHU route-deviation pipeline."""
+"""Personalized historical reference set builder."""
 
 from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass
+import re
 from typing import Sequence
 
 from .loader import Trajectory
 
-# Authoritative minimum historical trajectories per WEGOTCHU contract
 MIN_HISTORICAL_TRAJECTORIES: int = 5
 
 STATUS_SUFFICIENT: str = "SUFFICIENT"
 STATUS_INSUFFICIENT_HISTORY: str = "INSUFFICIENT_HISTORY"
 
 
+def parent_trajectory_id(trajectory_id: str) -> str:
+    """Return the original trajectory ID without a segment suffix."""
+    return re.sub(r"_seg\d+$", "", trajectory_id)
+
+
 @dataclass(frozen=True)
 class ReferenceSetResult:
-    """
-    Result of building a personalized historical reference set for a candidate trajectory.
-
-    Attributes:
-        user_id: The identifier of the user to whom the candidate belongs.
-        candidate_id: The identifier of the candidate trajectory.
-        is_sufficient: True if the number of eligible historical trajectories >= min_history.
-        status: "SUFFICIENT" if is_sufficient else "INSUFFICIENT_HISTORY".
-        trajectories: Tuple of eligible historical trajectories sorted chronologically (oldest to newest).
-    """
+    """Result of building a historical reference set."""
 
     user_id: str
     candidate_id: str
@@ -44,78 +40,87 @@ class ReferenceSetResult:
         return self.trajectories[index]
 
 
+def _validate_inputs(
+    candidate_trajectory: Trajectory,
+    min_history: int,
+) -> None:
+    if not isinstance(candidate_trajectory, Trajectory):
+        raise TypeError(
+            "Expected candidate_trajectory to be a Trajectory, "
+            f"got {type(candidate_trajectory).__name__}"
+        )
+
+    if min_history < 1:
+        raise ValueError(f"min_history must be at least 1, got {min_history}")
+
+
+def _build_result(
+    candidate_trajectory: Trajectory,
+    eligible: Sequence[Trajectory],
+    min_history: int,
+) -> ReferenceSetResult:
+    is_sufficient = len(eligible) >= min_history
+    status = STATUS_SUFFICIENT if is_sufficient else STATUS_INSUFFICIENT_HISTORY
+
+    return ReferenceSetResult(
+        user_id=candidate_trajectory.user_id,
+        candidate_id=candidate_trajectory.trajectory_id,
+        is_sufficient=is_sufficient,
+        status=status,
+        trajectories=tuple(eligible),
+    )
+
+
 def build_reference_set(
     trajectories: Sequence[Trajectory],
     candidate_trajectory: Trajectory,
     min_history: int = MIN_HISTORICAL_TRAJECTORIES,
 ) -> ReferenceSetResult:
     """
-    Identify and return the valid historical reference set for a candidate trajectory.
+    Build a chronological reference set for a candidate trajectory.
 
-    Rules:
-        1. User Identity: Only trajectories matching candidate_trajectory.user_id qualify.
-        2. Strict Temporal Precedence: Only trajectories whose start timestamp strictly
-           precedes candidate_trajectory's start timestamp (start_time < candidate_start_time) qualify.
-        3. Candidate Exclusion: The candidate trajectory is never included in its own reference set.
-        4. Deterministic Ordering: References are returned sorted chronologically from oldest to newest.
-        5. Cold-Start Enforcement: If eligible historical count < min_history, reports
-           status = "INSUFFICIENT_HISTORY" and is_sufficient = False.
-
-    Args:
-        trajectories: Pool of candidate and historical Trajectory objects.
-        candidate_trajectory: The candidate Trajectory being evaluated.
-        min_history: Minimum required historical trajectories (default is 5).
-
-    Returns:
-        ReferenceSetResult indicating sufficiency status and containing the reference trajectories.
-
-    Raises:
-        TypeError: If candidate_trajectory is not a Trajectory instance.
-        ValueError: If min_history < 1.
+    Only same-user trajectories that strictly precede the candidate are
+    eligible. Segments belonging to the same original trajectory count once.
+    The candidate and all of its child segments are excluded.
     """
-    if not isinstance(candidate_trajectory, Trajectory):
-        raise TypeError(
-            f"Expected candidate_trajectory to be a Trajectory, got {type(candidate_trajectory).__name__}"
-        )
-
-    if min_history < 1:
-        raise ValueError(f"min_history must be at least 1, got {min_history}")
+    _validate_inputs(candidate_trajectory, min_history)
 
     user_id = candidate_trajectory.user_id
     candidate_id = candidate_trajectory.trajectory_id
+    candidate_parent_id = parent_trajectory_id(candidate_id)
     candidate_start_time = candidate_trajectory.points[0].timestamp
 
-    eligible: list[Trajectory] = []
+    eligible_by_parent: dict[str, Trajectory] = {}
 
-    for traj in trajectories:
-        # Rule 1: Same user only (no cross-user pooling or global reference sets)
-        if traj.user_id != user_id:
+    for trajectory in trajectories:
+        if trajectory.user_id != user_id:
             continue
 
-        # Rule 3: Candidate itself must never appear in its own reference set
-        if traj.trajectory_id == candidate_id:
+        trajectory_parent_id = parent_trajectory_id(trajectory.trajectory_id)
+
+        if trajectory_parent_id == candidate_parent_id:
             continue
 
-        ref_start_time = traj.points[0].timestamp
+        trajectory_start_time = trajectory.points[0].timestamp
 
-        # Rule 2: Strictly historical (must strictly precede candidate start time)
-        # Trajectories occurring at the exact same start timestamp or in the future are excluded.
-        if ref_start_time < candidate_start_time:
-            eligible.append(traj)
+        if trajectory_start_time < candidate_start_time:
+            eligible_by_parent.setdefault(
+                trajectory_parent_id,
+                trajectory,
+            )
 
-    # Rule 4: Deterministic chronological ordering from oldest to newest
-    # Tie-break on trajectory_id for absolute determinism if start timestamps match
-    eligible.sort(key=lambda t: (t.points[0].timestamp, t.trajectory_id))
+    eligible = sorted(
+        eligible_by_parent.values(),
+        key=lambda trajectory: (
+            trajectory.points[0].timestamp,
+            trajectory.trajectory_id,
+        ),
+    )
 
-    is_sufficient = len(eligible) >= min_history
-    status = STATUS_SUFFICIENT if is_sufficient else STATUS_INSUFFICIENT_HISTORY
-
-    return ReferenceSetResult(
-        user_id=user_id,
-        candidate_id=candidate_id,
-        is_sufficient=is_sufficient,
-        status=status,
-        trajectories=tuple(eligible),
+    return _build_result(
+        candidate_trajectory=candidate_trajectory,
+        eligible=eligible,
+        min_history=min_history,
     )
 
 
@@ -125,61 +130,50 @@ def build_reference_set_from_sorted(
     min_history: int = MIN_HISTORICAL_TRAJECTORIES,
 ) -> ReferenceSetResult:
     """
-    Identify and return the valid historical reference set using binary search.
+    Build a reference set from trajectories sorted chronologically.
 
-    Preconditions:
-        1. Same User: user_trajectories must contain trajectories belonging solely
-           to candidate_trajectory.user_id.
-        2. Sorted Input: user_trajectories must be sorted chronologically by
-           (points[0].timestamp, trajectory_id).
+    The input must be sorted by:
 
-    Guarantees:
-        - Strict Temporal Precedence: Finds the first trajectory with start
-          timestamp >= candidate start timestamp using bisect_left, taking only
-          the strictly earlier prefix.
-        - Equal-Time & Future Exclusion: All trajectories starting at or after
-          candidate start timestamp are excluded.
-        - Candidate Exclusion: Candidate is strictly excluded by trajectory_id,
-          even if present in the historical prefix.
-        - Deterministic Ordering: Preserves the existing (start_time, trajectory_id)
-          ordering.
-        - Cold-Start Enforcement: Reports INSUFFICIENT_HISTORY if historical count
-          < min_history.
+    1. Trajectory start timestamp.
+    2. Trajectory ID as a deterministic tie-breaker.
+
+    Only trajectories strictly earlier than the candidate are considered.
+    Multiple segments from one original trajectory count as one history item.
     """
-    if not isinstance(candidate_trajectory, Trajectory):
-        raise TypeError(
-            f"Expected candidate_trajectory to be a Trajectory, got {type(candidate_trajectory).__name__}"
-        )
-
-    if min_history < 1:
-        raise ValueError(f"min_history must be at least 1, got {min_history}")
+    _validate_inputs(candidate_trajectory, min_history)
 
     user_id = candidate_trajectory.user_id
     candidate_id = candidate_trajectory.trajectory_id
+    candidate_parent_id = parent_trajectory_id(candidate_id)
     candidate_start_time = candidate_trajectory.points[0].timestamp
 
-    # Locate the boundary where start_timestamp >= candidate_start_time
-    idx = bisect_left(
+    boundary_index = bisect_left(
         user_trajectories,
         candidate_start_time,
-        key=lambda t: t.points[0].timestamp,
+        key=lambda trajectory: trajectory.points[0].timestamp,
     )
 
-    # Prefix consists solely of trajectories where start_timestamp < candidate_start_time
-    prefix = user_trajectories[:idx]
+    prefix = user_trajectories[:boundary_index]
+    eligible_by_parent: dict[str, Trajectory] = {}
 
-    # Filter out candidate_id if present (and defensively ensure same user)
-    eligible = [
-        t for t in prefix if t.trajectory_id != candidate_id and t.user_id == user_id
-    ]
+    for trajectory in prefix:
+        if trajectory.user_id != user_id:
+            continue
 
-    is_sufficient = len(eligible) >= min_history
-    status = STATUS_SUFFICIENT if is_sufficient else STATUS_INSUFFICIENT_HISTORY
+        trajectory_parent_id = parent_trajectory_id(trajectory.trajectory_id)
 
-    return ReferenceSetResult(
-        user_id=user_id,
-        candidate_id=candidate_id,
-        is_sufficient=is_sufficient,
-        status=status,
-        trajectories=tuple(eligible),
+        if trajectory_parent_id == candidate_parent_id:
+            continue
+
+        eligible_by_parent.setdefault(
+            trajectory_parent_id,
+            trajectory,
+        )
+
+    eligible = list(eligible_by_parent.values())
+
+    return _build_result(
+        candidate_trajectory=candidate_trajectory,
+        eligible=eligible,
+        min_history=min_history,
     )

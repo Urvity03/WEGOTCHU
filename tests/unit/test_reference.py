@@ -415,3 +415,49 @@ def test_sorted_equivalence_across_candidate_positions():
         assert [t.trajectory_id for t in res_fast] == [
             t.trajectory_id for t in res_baseline
         ]
+
+
+def test_segmented_children_count_as_one_original_trajectory():
+    """Segments from one original trajectory count only once."""
+    candidate = _make_traj("user_1", "candidate", start_sec=1000)
+
+    history = [
+        _make_traj("user_1", "trip_01_seg0", start_sec=100),
+        _make_traj("user_1", "trip_01_seg1", start_sec=200),
+        _make_traj("user_1", "trip_02", start_sec=300),
+        _make_traj("user_1", "trip_03", start_sec=400),
+        _make_traj("user_1", "trip_04", start_sec=500),
+    ]
+
+    result = build_reference_set(
+        history,
+        candidate,
+        min_history=5,
+    )
+
+    assert result.is_sufficient is False
+    assert result.status == STATUS_INSUFFICIENT_HISTORY
+    assert len(result) == 4
+
+
+def test_sorted_reference_deduplicates_segmented_children():
+    """The sorted reference path also deduplicates original trajectories."""
+    candidate = _make_traj("user_1", "candidate", start_sec=1000)
+
+    history = [
+        _make_traj("user_1", "trip_01_seg0", start_sec=100),
+        _make_traj("user_1", "trip_01_seg1", start_sec=200),
+        _make_traj("user_1", "trip_02", start_sec=300),
+        _make_traj("user_1", "trip_03", start_sec=400),
+        _make_traj("user_1", "trip_04", start_sec=500),
+    ]
+
+    result = build_reference_set_from_sorted(
+        history,
+        candidate,
+        min_history=5,
+    )
+
+    assert result.is_sufficient is False
+    assert result.status == STATUS_INSUFFICIENT_HISTORY
+    assert len(result) == 4
