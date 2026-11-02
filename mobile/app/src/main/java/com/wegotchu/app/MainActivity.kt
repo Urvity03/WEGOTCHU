@@ -124,13 +124,15 @@ private val trustedContactPickerLauncher =
 
             if (fineGranted || coarseGranted) {
                 locationCollector.start()
-                startTelemetryTest()
             } else {
                 Log.e(
                     "TelemetryBuilder",
                     "Location permission denied"
                 )
             }
+
+            // Start telemetry whether location permission is granted or denied.
+            startTelemetryTest()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -174,6 +176,8 @@ private val trustedContactPickerLauncher =
         var contacts by remember {
             mutableStateOf(emptyList<TrustedContact>())
         }
+var isSOSSubmitting by remember { mutableStateOf(false) }
+var sosMessage by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(Unit) {
             refreshContacts = {
                 contacts = try {
@@ -215,6 +219,74 @@ private val trustedContactPickerLauncher =
                         contacts
                     }
                 },
+
+onSOS = {
+    if (!isSOSSubmitting) {
+        isSOSSubmitting = true
+        sosMessage = null
+
+        lifecycleScope.launch {
+            try {
+                val location = locationCollector.latestLocation()
+
+                val payload = com.wegotchu.app.network.SOSAlertRequest(
+                    latitude = location?.latitude,
+                    longitude = location?.longitude,
+                    accuracyMeters = location?.accuracyMeters?.toDouble(),
+                    note = "Manual SOS triggered from Android app"
+                )
+
+                val token = com.wegotchu.app.network.AuthTokenProvider.getToken()
+
+                val response =
+                    com.wegotchu.app.network.RetrofitClient.api.createSOSAlert(
+                        authorization = "Bearer $token",
+                        payload = payload
+                    )
+
+                if (response.isSuccessful) {
+                    val alert = response.body()
+
+                    sosMessage = if (alert != null) {
+                        val locationMessage = if (location != null) {
+                            "Location attached."
+                        } else {
+                            "Location could not be attached."
+                        }
+
+                        val notificationMessage =
+                            if (alert.notificationStatus.equals(
+                                    "not_configured",
+                                    ignoreCase = true
+                                )
+                            ) {
+                                "Emergency contacts have NOT been notified because notifications are not configured."
+                            } else {
+                                "Notification status: ${alert.notificationStatus}."
+                            }
+
+                        "SOS alert recorded successfully. $locationMessage $notificationMessage"
+                    } else {
+                        "SOS request succeeded, but the response was empty."
+                    }
+                } else {
+                    sosMessage =
+                        "SOS request failed (HTTP ${response.code()}). Please try again."
+                }
+
+            } catch (exception: Exception) {
+                Log.e("ManualSOS", "Failed to submit SOS alert", exception)
+                sosMessage =
+                    "Could not send SOS. Check your connection and try again."
+            } finally {
+                isSOSSubmitting = false
+            }
+        }
+    }
+},
+
+isSOSSubmitting = isSOSSubmitting,
+sosMessage = sosMessage,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
