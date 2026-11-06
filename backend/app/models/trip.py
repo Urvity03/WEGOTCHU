@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel
 from sqlalchemy import DateTime, Index, Integer, String, TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
 from .telemetry import TripId
+from pydantic import BaseModel, Field
 
 
 class UTCDateTime(TypeDecorator):
@@ -144,6 +144,15 @@ class Trip(Base):
         UTCDateTime,
         nullable=True,
     )
+    timer_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    timer_expires_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime,
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime,
@@ -173,8 +182,11 @@ class StartTripRequest(BaseModel):
 
     trip_id: TripId
     started_at: datetime | None = None
+    timer_duration_seconds: int | None = Field(default=None, ge=60, le=86400)
+class ExpireTripRequest(BaseModel):
+    """Request payload to expire a Safety Mode trip after timer deadline."""
 
-
+    trip_id: TripId
 class CompleteTripRequest(BaseModel):
     """Request payload to finalize a Safety Mode trip.
 
@@ -197,6 +209,8 @@ class TripResponse(BaseModel):
     trip_status: str
     started_at: datetime
     ended_at: datetime | None = None
+    timer_duration_seconds: int | None = None
+    timer_expires_at: datetime | None = None
 
 
 class TripBriefingRequest(BaseModel):
