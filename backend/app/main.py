@@ -23,9 +23,7 @@ def _run_safety_timer_reconciliation() -> int:
 async def _safety_timer_reconciliation_loop() -> None:
     while True:
         try:
-            expired_count = await asyncio.to_thread(
-                _run_safety_timer_reconciliation
-            )
+            expired_count = await asyncio.to_thread(_run_safety_timer_reconciliation)
             if expired_count:
                 logger.info(
                     "Automatically expired %s overdue safety timer(s).",
@@ -36,9 +34,7 @@ async def _safety_timer_reconciliation_loop() -> None:
         except Exception:
             logger.exception("Safety timer reconciliation failed.")
 
-        await asyncio.sleep(
-            SAFETY_TIMER_RECONCILIATION_INTERVAL_SECONDS
-        )
+        await asyncio.sleep(SAFETY_TIMER_RECONCILIATION_INTERVAL_SECONDS)
 
 
 @asynccontextmanager

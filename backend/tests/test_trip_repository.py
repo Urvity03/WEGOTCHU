@@ -927,9 +927,7 @@ def test_expire_due_safety_timers_ignores_trip_without_timer(repo):
         started_at=now - timedelta(minutes=10),
     )
 
-    expired_count = repo.expire_due_safety_timers(
-        now=now + timedelta(days=1)
-    )
+    expired_count = repo.expire_due_safety_timers(now=now + timedelta(days=1))
 
     repo.db.refresh(trip)
     assert expired_count == 0

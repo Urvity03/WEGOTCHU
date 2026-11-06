@@ -485,6 +485,8 @@ def test_start_trip_missing_authentication():
         json={"trip_id": "trip-no-auth"},
     )
     assert response.status_code == 401
+
+
 def test_start_trip_with_safety_timer():
     trip_id = "trip-safety-timer-001"
     duration = 300
@@ -515,6 +517,8 @@ def test_start_trip_with_safety_timer():
         assert trip.timer_expires_at is not None
     finally:
         db.close()
+
+
 def test_start_trip_rejects_invalid_timer_duration():
     invalid_durations = [30, 86401, 0, -60]
 
@@ -529,6 +533,8 @@ def test_start_trip_rejects_invalid_timer_duration():
         )
 
         assert response.status_code == 422
+
+
 def test_expire_trip_rejects_early_expiry():
     trip_id = "trip-early-expiry-001"
 
@@ -550,6 +556,8 @@ def test_expire_trip_rejects_early_expiry():
 
     assert response.status_code == 409
     assert "not expired yet" in response.json()["detail"]
+
+
 def test_expire_trip_successfully_after_deadline():
     trip_id = "trip-expiry-success-001"
 
@@ -585,6 +593,8 @@ def test_expire_trip_successfully_after_deadline():
 
     assert data["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
     assert data["ended_at"] is not None
+
+
 def test_expire_trip_repeated_request_is_idempotent():
     trip_id = "trip-expiry-repeat-001"
 
@@ -626,6 +636,8 @@ def test_expire_trip_repeated_request_is_idempotent():
     assert second_response.status_code == 200
     assert second_response.json()["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
     assert second_response.json()["ended_at"] == first_ended_at
+
+
 def test_expire_trip_rejects_other_users_trip():
     trip_id = "trip-expiry-owner-001"
 
@@ -658,6 +670,7 @@ def test_expire_trip_rejects_other_users_trip():
     assert response.status_code == 403
     assert response.json()["detail"] == "Trip does not belong to authenticated user"
 
+
 def test_expire_trip_rejects_trip_without_timer():
     trip_id = "trip-expiry-no-timer-001"
 
@@ -677,6 +690,7 @@ def test_expire_trip_rejects_trip_without_timer():
     assert response.status_code == 409
     assert response.json()["detail"] == "No safety timer is configured for this trip"
 
+
 def test_expire_trip_returns_404_for_unknown_trip():
     response = client.post(
         "/api/v1/telemetry/trips/expire",
@@ -685,6 +699,8 @@ def test_expire_trip_returns_404_for_unknown_trip():
     )
 
     assert response.status_code == 404
+
+
 def test_start_trip_duplicate_idempotency_same_user():
     trip_id = "trip-idempotent-start"
 

@@ -77,9 +77,7 @@ class TripRepository:
                 raise TypeError("timer_duration_seconds must be an integer")
 
             if not 60 <= timer_duration_seconds <= 86400:
-                raise ValueError(
-                    "timer_duration_seconds must be between 60 and 86400"
-                )
+                raise ValueError("timer_duration_seconds must be between 60 and 86400")
 
         clean_trip_id = trip_id.strip()
         clean_user_id = user_id.strip()
@@ -88,11 +86,7 @@ class TripRepository:
         if isinstance(status, str):
             status = TripStatus(status)
 
-        existing = (
-            self.db.query(Trip)
-            .filter(Trip.trip_id == clean_trip_id)
-            .first()
-        )
+        existing = self.db.query(Trip).filter(Trip.trip_id == clean_trip_id).first()
 
         if existing is not None:
             if existing.user_id != clean_user_id:

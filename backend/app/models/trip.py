@@ -183,10 +183,14 @@ class StartTripRequest(BaseModel):
     trip_id: TripId
     started_at: datetime | None = None
     timer_duration_seconds: int | None = Field(default=None, ge=60, le=86400)
+
+
 class ExpireTripRequest(BaseModel):
     """Request payload to expire a Safety Mode trip after timer deadline."""
 
     trip_id: TripId
+
+
 class CompleteTripRequest(BaseModel):
     """Request payload to finalize a Safety Mode trip.
 
