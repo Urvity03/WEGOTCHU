@@ -39,12 +39,19 @@ import android.provider.ContactsContract
 import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.wegotchu.app.safety.SafetyPinStorage
+import com.wegotchu.app.safety.SafetyTimerStorage
+import java.text.SimpleDateFormat
+import java.util.Locale
+import kotlinx.coroutines.CancellationException
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var sensorCollector: SensorCollector
     private lateinit var locationCollector: LocationCollector
     private lateinit var telemetryBuilder: TelemetryBuilder
+    private lateinit var safetyPinStorage: SafetyPinStorage
+    private lateinit var safetyTimerStorage: SafetyTimerStorage
 
     private val telemetrySender = TelemetrySender()
     private lateinit var trustedContactRepository: TrustedContactRepository
@@ -138,6 +145,8 @@ private val trustedContactPickerLauncher =
     override fun onCreate(savedInstanceState: Bundle?) {
        super.onCreate(savedInstanceState)
        trustedContactRepository = TrustedContactRepository(applicationContext)
+       safetyPinStorage = SafetyPinStorage(applicationContext)
+       safetyTimerStorage = SafetyTimerStorage(applicationContext)
 
        Log.d("MainActivity", "onCreate() started")
         enableEdgeToEdge()
@@ -178,6 +187,27 @@ private val trustedContactPickerLauncher =
         }
 var isSOSSubmitting by remember { mutableStateOf(false) }
 var sosMessage by remember { mutableStateOf<String?>(null) }
+var timerState by remember {
+    mutableStateOf(safetyTimerStorage.load())
+}
+var timerRemainingSeconds by remember {
+    mutableStateOf<Long?>(null)
+}
+var isTimerSubmitting by remember {
+    mutableStateOf(false)
+}
+var timerMessage by remember {
+    mutableStateOf<String?>(null)
+}
+var pinConfigured by remember {
+    mutableStateOf(
+        runCatching {
+            safetyPinStorage.isPinConfigured()
+        }.onFailure { exception ->
+            Log.e("SafetyTimer", "Could not check PIN configuration", exception)
+        }.getOrDefault(false)
+    )
+}
         LaunchedEffect(Unit) {
             refreshContacts = {
                 contacts = try {
@@ -194,6 +224,74 @@ var sosMessage by remember { mutableStateOf<String?>(null) }
 
         refreshContacts?.invoke()
         }
+LaunchedEffect(timerState) {
+    val activeTimer = timerState
+
+    if (activeTimer == null) {
+        timerRemainingSeconds = null
+        return@LaunchedEffect
+    }
+
+    val expiryMillis = parseServerTimestamp(activeTimer.expiresAt)
+
+    if (expiryMillis == null) {
+        timerMessage = "Could not read the server timer deadline."
+        return@LaunchedEffect
+    }
+
+    while (true) {
+        val remaining = (
+            (expiryMillis - System.currentTimeMillis() + 999) / 1000
+        ).coerceAtLeast(0)
+
+        timerRemainingSeconds = remaining
+
+        if (remaining == 0L) {
+            isTimerSubmitting = true
+
+            try {
+                val token =
+                    com.wegotchu.app.network.AuthTokenProvider.getToken()
+
+                val response =
+                    com.wegotchu.app.network.RetrofitClient.api.expireSafetyTimer(
+                        authorization = "Bearer $token",
+                        payload = com.wegotchu.app.network.ExpireSafetyTimerRequest(
+                            tripId = activeTimer.tripId
+                        )
+                    )
+
+                if (response.isSuccessful) {
+                    safetyTimerStorage.clear()
+                    timerState = null
+                    timerMessage =
+                        "Safety timer expired. Server status: EXPIRED_INACTIVE. No SOS notification was sent automatically."
+		    return@LaunchedEffect
+                } else {
+                    timerMessage =
+                        "Timer deadline reached, but the server could not confirm expiry (HTTP ${response.code()}). Please retry when connected."
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                Log.e("SafetyTimer", "Expiry request failed", exception)
+                timerMessage =
+                    "Timer deadline reached, but server confirmation failed. Please check your connection."
+            } finally {
+                isTimerSubmitting = false
+            }
+
+            // Retry server confirmation while the timer remains locally active.
+            // The backend deadline remains authoritative.
+            if (timerState?.tripId == activeTimer.tripId) {
+                delay(30_000)
+            }
+            continue
+        }
+
+        delay(1000)
+    }
+}
 
         Scaffold(
             modifier = Modifier.fillMaxSize()
@@ -287,6 +385,133 @@ onSOS = {
 
 isSOSSubmitting = isSOSSubmitting,
 sosMessage = sosMessage,
+timerActive = timerState != null,
+timerRemainingSeconds = timerRemainingSeconds,
+isTimerSubmitting = isTimerSubmitting,
+timerMessage = timerMessage,
+pinConfigured = pinConfigured,
+
+onSetupSafetyPin = { pin ->
+    lifecycleScope.launch {
+        try {
+            withContext(Dispatchers.IO) {
+                safetyPinStorage.setupPin(pin)
+            }
+            pinConfigured = true
+            timerMessage = "Safety PIN configured successfully."
+        } catch (exception: Exception) {
+            Log.e("SafetyTimer", "PIN setup failed", exception)
+            timerMessage = "Could not securely save your PIN."
+        }
+    }
+},
+
+onStartSafetyTimer = { duration ->
+    if (!isTimerSubmitting && timerState == null) {
+        isTimerSubmitting = true
+        timerMessage = null
+
+        lifecycleScope.launch {
+            try {
+                val token =
+                    com.wegotchu.app.network.AuthTokenProvider.getToken()
+
+                val tripId = java.util.UUID.randomUUID().toString()
+
+                val response =
+                    com.wegotchu.app.network.RetrofitClient.api.startSafetyTimer(
+                        authorization = "Bearer $token",
+                        payload = com.wegotchu.app.network.StartSafetyTimerRequest(
+                            tripId = tripId,
+                            timerDurationSeconds = duration
+                        )
+                    )
+
+                val body = response.body()
+
+                if (response.isSuccessful && body?.timerExpiresAt != null) {
+                    val newState = com.wegotchu.app.safety.SafetyTimerState(
+                        tripId = body.tripId,
+                        expiresAt = body.timerExpiresAt,
+                        durationSeconds = body.timerDurationSeconds ?: duration
+                    )
+
+                    withContext(Dispatchers.IO) {
+                        safetyTimerStorage.save(newState)
+                    }
+
+                    timerState = newState
+                    timerMessage = "Safety timer started successfully."
+                } else {
+                    timerMessage = "Could not start timer (HTTP ${response.code()})."
+                }
+            } catch (exception: Exception) {
+                Log.e("SafetyTimer", "Timer start failed", exception)
+                timerMessage = "Could not start timer. Check your connection."
+            } finally {
+                isTimerSubmitting = false
+            }
+        }
+    }
+},
+
+onDeactivateSafetyTimer = { pin ->
+    if (!isTimerSubmitting) {
+        isTimerSubmitting = true
+
+        lifecycleScope.launch {
+            try {
+                val verification = withContext(Dispatchers.IO) {
+                    safetyPinStorage.verifyPin(pin)
+                }
+
+                when (verification) {
+                    SafetyPinStorage.VerificationResult.SUCCESS -> {
+                        val activeTimer = timerState
+
+                        if (activeTimer != null) {
+                            val token =
+                                com.wegotchu.app.network.AuthTokenProvider.getToken()
+
+                            val response =
+                                com.wegotchu.app.network.RetrofitClient.api.completeSafetyTimer(
+                                    authorization = "Bearer $token",
+                                    payload = com.wegotchu.app.network.CompleteSafetyTimerRequest(
+                                        tripId = activeTimer.tripId
+                                    )
+                                )
+
+                            if (response.isSuccessful) {
+                                withContext(Dispatchers.IO) {
+                                    safetyTimerStorage.clear()
+                                }
+                                timerState = null
+                                timerRemainingSeconds = null
+                                timerMessage = "Safety timer deactivated successfully."
+                            } else {
+                                timerMessage = "Could not deactivate timer (HTTP ${response.code()})."
+                            }
+                        }
+                    }
+
+                    SafetyPinStorage.VerificationResult.INCORRECT ->
+                        timerMessage = "Incorrect PIN. Please try again."
+
+                    SafetyPinStorage.VerificationResult.LOCKED_OUT ->
+                        timerMessage = "PIN locked for 5 minutes after repeated incorrect attempts."
+
+                    SafetyPinStorage.VerificationResult.NOT_CONFIGURED ->
+                        timerMessage = "Please configure a safety PIN first."
+                }
+            } catch (exception: Exception) {
+                Log.e("SafetyTimer", "Timer deactivation failed", exception)
+                timerMessage = "Could not deactivate timer. Please try again."
+            } finally {
+                isTimerSubmitting = false
+            }
+        }
+    }
+},
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
@@ -295,6 +520,24 @@ sosMessage = sosMessage,
     }
 }
     }
+private fun parseServerTimestamp(value: String): Long? {
+    val formats = listOf(
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+        "yyyy-MM-dd'T'HH:mm:ssXXX"
+    )
+
+    for (format in formats) {
+        try {
+            val parser = SimpleDateFormat(format, Locale.US)
+            parser.isLenient = false
+            return parser.parse(value)?.time
+        } catch (_: Exception) {
+            // Try the next supported timestamp format.
+        }
+    }
+
+    return null
+}
 
     override fun onResume() {
       super.onResume()

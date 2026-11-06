@@ -20,6 +20,7 @@ from ..models.trip import (
     TERMINAL_TRIP_STATUSES,
     CompleteTripRequest,
     StartTripRequest,
+    ExpireTripRequest,
     Trip,
     TripBriefingRequest,
     TripStatus,
@@ -270,6 +271,7 @@ def start_trip(
             user_id=pseudonymous_user_id,
             started_at=started_at,
             status=TripStatus.INITIALIZED,
+            timer_duration_seconds=payload.timer_duration_seconds,
         )
     except TripOwnershipError as exc:
         raise HTTPException(
@@ -296,6 +298,8 @@ def start_trip(
         "trip_status": trip.status,
         "started_at": trip.started_at,
         "ended_at": trip.ended_at,
+        "timer_duration_seconds": trip.timer_duration_seconds,
+        "timer_expires_at": trip.timer_expires_at,
     }
 
 
@@ -447,6 +451,98 @@ def complete_trip(
             if risk_assessment is not None
             else None
         ),
+    }
+
+
+@router.post("/telemetry/trips/expire")
+def expire_trip(
+    payload: ExpireTripRequest,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Expire a trip only after its server-controlled safety timer deadline."""
+
+    pseudonymous_user_id = pseudonymize_identifier(current_user_id, SECRET_KEY)
+    repo = TripRepository(db)
+
+    trip = repo.get_trip(payload.trip_id)
+
+    if trip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trip '{payload.trip_id}' not found",
+        )
+
+    if trip.user_id != pseudonymous_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trip does not belong to authenticated user",
+        )
+
+    # Repeated expiry requests must remain idempotent.
+    if trip.status == TripStatus.EXPIRED_INACTIVE.value:
+        return {
+            "status": "accepted",
+            "trip_id": trip.trip_id,
+            "trip_status": trip.status,
+            "ended_at": trip.ended_at,
+        }
+
+    # Other terminal states cannot be changed.
+    if trip.status in {s.value for s in TERMINAL_TRIP_STATUSES}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Trip is already finalized and cannot be expired",
+        )
+
+    if trip.timer_expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No safety timer is configured for this trip",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    deadline = trip.timer_expires_at
+
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+
+    if now_utc < deadline:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Safety timer has not expired yet",
+        )
+
+    try:
+        updated_trip = repo.update_trip_status(
+            trip_id=payload.trip_id,
+            user_id=pseudonymous_user_id,
+            new_status=TripStatus.EXPIRED_INACTIVE,
+            ended_at=now_utc,
+        )
+    except TripLifecycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except TripOwnershipError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to expire trip")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to expire trip",
+        ) from exc
+
+    return {
+        "status": "accepted",
+        "trip_id": updated_trip.trip_id,
+        "trip_status": updated_trip.status,
+        "ended_at": updated_trip.ended_at,
     }
 
 

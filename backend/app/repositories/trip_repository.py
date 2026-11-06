@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -54,32 +54,30 @@ class TripRepository:
         user_id: str,
         started_at: datetime,
         status: TripStatus = TripStatus.INITIALIZED,
+        timer_duration_seconds: int | None = None,
     ) -> Trip:
-        """
-        Create a new persistent Trip record or return existing if idempotent.
+        """Create a new persistent Trip record or return an existing one."""
 
-        Parameters:
-            trip_id: Unique client-generated or server-anchored trip session ID.
-            user_id: Authenticated pseudonymous user identity (HMAC-SHA256).
-                     Raw device identifiers must not be passed here.
-            started_at: Timezone-aware starting timestamp.
-            status: Initial lifecycle status (defaults to INITIALIZED).
-
-        Returns:
-            The created or idempotently matched Trip instance.
-
-        Raises:
-            ValueError: If trip_id or user_id is empty/whitespace, or started_at is naive.
-            TripOwnershipError: If trip_id already exists belonging to another user.
-        """
         if not isinstance(trip_id, str) or not trip_id.strip():
             raise ValueError("trip_id must be a non-empty string")
+
         if not isinstance(user_id, str) or not user_id.strip():
             raise ValueError("user_id must be a non-empty string")
+
         if not isinstance(started_at, datetime):
             raise TypeError("started_at must be a datetime instance")
+
         if started_at.tzinfo is None:
             raise ValueError("started_at must be a timezone-aware datetime")
+
+        if timer_duration_seconds is not None:
+            if isinstance(timer_duration_seconds, bool) or not isinstance(
+                timer_duration_seconds, int
+            ):
+                raise TypeError("timer_duration_seconds must be an integer")
+
+            if not 60 <= timer_duration_seconds <= 86400:
+                raise ValueError("timer_duration_seconds must be between 60 and 86400")
 
         clean_trip_id = trip_id.strip()
         clean_user_id = user_id.strip()
@@ -89,20 +87,30 @@ class TripRepository:
             status = TripStatus(status)
 
         existing = self.db.query(Trip).filter(Trip.trip_id == clean_trip_id).first()
+
         if existing is not None:
             if existing.user_id != clean_user_id:
                 raise TripOwnershipError(
-                    f"Trip '{clean_trip_id}' already exists and belongs to a different user."
+                    f"Trip '{clean_trip_id}' already exists and belongs "
+                    "to a different user."
                 )
-            # Idempotent repeated request from same authenticated user
             return existing
 
         now_utc = datetime.now(timezone.utc)
+
+        timer_expires_at = (
+            now_utc + timedelta(seconds=timer_duration_seconds)
+            if timer_duration_seconds is not None
+            else None
+        )
+
         trip = Trip(
             trip_id=clean_trip_id,
             user_id=clean_user_id,
             status=status.value,
             started_at=utc_started_at,
+            timer_duration_seconds=timer_duration_seconds,
+            timer_expires_at=timer_expires_at,
             created_at=now_utc,
             updated_at=now_utc,
         )
@@ -206,6 +214,57 @@ class TripRepository:
             self.db.commit()
             self.db.refresh(trip)
         return trip
+
+    def expire_due_safety_timers(
+        self,
+        now: datetime | None = None,
+    ) -> int:
+        """Expire all active safety timers whose server deadlines have passed.
+
+        Row-level locking with SKIP LOCKED allows multiple PostgreSQL workers
+        to run reconciliation without processing the same trip concurrently.
+        """
+        now_utc = now or datetime.now(timezone.utc)
+        if not isinstance(now_utc, datetime) or now_utc.tzinfo is None:
+            raise ValueError("now must be a timezone-aware datetime")
+        now_utc = now_utc.astimezone(timezone.utc)
+
+        due_trips = (
+            self.db.query(Trip)
+            .filter(
+                Trip.status.in_(
+                    [
+                        TripStatus.INITIALIZED.value,
+                        TripStatus.ACTIVE.value,
+                    ]
+                ),
+                Trip.timer_expires_at.isnot(None),
+                Trip.timer_expires_at <= now_utc,
+            )
+            .order_by(Trip.timer_expires_at.asc(), Trip.trip_id.asc())
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+
+        expired_count = 0
+        try:
+            for trip in due_trips:
+                self.update_trip_status(
+                    trip_id=trip.trip_id,
+                    user_id=trip.user_id,
+                    new_status=TripStatus.EXPIRED_INACTIVE,
+                    ended_at=now_utc,
+                    commit=False,
+                )
+                expired_count += 1
+
+            if expired_count:
+                self.db.commit()
+
+            return expired_count
+        except Exception:
+            self.db.rollback()
+            raise
 
     def get_eligible_reference_trips(
         self,

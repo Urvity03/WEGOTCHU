@@ -12,7 +12,7 @@ from backend.app.auth import SECRET_KEY, create_access_token
 from backend.app.database import Base, get_db
 from backend.app.main import app
 from backend.app.models.telemetry_record import TelemetryRecord
-from backend.app.models.trip import TripStatus
+from backend.app.models.trip import Trip, TripStatus
 from backend.app.repositories.trip_repository import TripRepository
 from backend.app.services.telemetry_adapter import pseudonymize_identifier
 
@@ -461,7 +461,8 @@ def test_start_trip_successful():
     assert data["trip_status"] == TripStatus.INITIALIZED.value
     assert data["started_at"] is not None
     assert data["ended_at"] is None
-
+    assert data["timer_duration_seconds"] is None
+    assert data["timer_expires_at"] is None
     # Verify DB persistence
     db = TestingSessionLocal()
     try:
@@ -469,6 +470,8 @@ def test_start_trip_successful():
         trip = repo.get_trip(trip_id)
         assert trip is not None
         assert trip.status == TripStatus.INITIALIZED.value
+        assert trip.timer_duration_seconds is None
+        assert trip.timer_expires_at is None
         expected_user = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
         assert trip.user_id == expected_user
         assert trip.user_id != TEST_DEVICE_ID
@@ -484,23 +487,254 @@ def test_start_trip_missing_authentication():
     assert response.status_code == 401
 
 
-def test_start_trip_duplicate_idempotency_same_user():
-    trip_id = "trip-idempotent-start"
-    res1 = client.post(
+def test_start_trip_with_safety_timer():
+    trip_id = "trip-safety-timer-001"
+    duration = 300
+
+    response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": duration,
+        },
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["timer_duration_seconds"] == duration
+    assert data["timer_expires_at"] is not None
+
+    # Verify timer persistence in the database.
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        trip = repo.get_trip(trip_id)
+
+        assert trip is not None
+        assert trip.timer_duration_seconds == duration
+        assert trip.timer_expires_at is not None
+    finally:
+        db.close()
+
+
+def test_start_trip_rejects_invalid_timer_duration():
+    invalid_durations = [30, 86401, 0, -60]
+
+    for index, duration in enumerate(invalid_durations):
+        response = client.post(
+            "/api/v1/telemetry/trips/start",
+            json={
+                "trip_id": f"trip-invalid-timer-{index}",
+                "timer_duration_seconds": duration,
+            },
+            headers=auth_headers(),
+        )
+
+        assert response.status_code == 422
+
+
+def test_expire_trip_rejects_early_expiry():
+    trip_id = "trip-early-expiry-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 409
+    assert "not expired yet" in response.json()["detail"]
+
+
+def test_expire_trip_successfully_after_deadline():
+    trip_id = "trip-expiry-success-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    # Simulate the timer deadline having passed.
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
+    assert data["ended_at"] is not None
+
+
+def test_expire_trip_repeated_request_is_idempotent():
+    trip_id = "trip-expiry-repeat-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    first_response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert first_response.status_code == 200
+
+    first_ended_at = first_response.json()["ended_at"]
+
+    second_response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert second_response.status_code == 200
+    assert second_response.json()["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
+    assert second_response.json()["ended_at"] == first_ended_at
+
+
+def test_expire_trip_rejects_other_users_trip():
+    trip_id = "trip-expiry-owner-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers("user_A"),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers("user_B"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Trip does not belong to authenticated user"
+
+
+def test_expire_trip_rejects_trip_without_timer():
+    trip_id = "trip-expiry-no-timer-001"
+
+    start_response = client.post(
         "/api/v1/telemetry/trips/start",
         json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "No safety timer is configured for this trip"
+
+
+def test_expire_trip_returns_404_for_unknown_trip():
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": "trip-does-not-exist-001"},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 404
+
+
+def test_start_trip_duplicate_idempotency_same_user():
+    trip_id = "trip-idempotent-start"
+
+    # First request starts a 5-minute timer.
+    res1 = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
         headers=auth_headers(),
     )
     assert res1.status_code == 200
 
+    first_data = res1.json()
+    original_expiry = first_data["timer_expires_at"]
+
+    # Duplicate request attempts to change it to 10 minutes.
     res2 = client.post(
         "/api/v1/telemetry/trips/start",
-        json={"trip_id": trip_id},
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 600,
+        },
         headers=auth_headers(),
     )
     assert res2.status_code == 200
-    assert res1.json()["trip_id"] == res2.json()["trip_id"]
-    assert res1.json()["started_at"] == res2.json()["started_at"]
+
+    second_data = res2.json()
+
+    assert first_data["trip_id"] == second_data["trip_id"]
+    assert first_data["started_at"] == second_data["started_at"]
+    assert second_data["timer_duration_seconds"] == 300
+    assert second_data["timer_expires_at"] == original_expiry
 
 
 def test_start_trip_duplicate_cross_user_rejected():
