@@ -239,6 +239,15 @@ Segmentation must not increase a user's trajectory count or make a user
 personalization-eligible solely because one original trajectory was divided
 into multiple segments.
 
+Manifest-level `personalization_eligible` is based on the user's total
+number of original trajectories. It does not guarantee that every
+validation or test candidate has five earlier, non-overlapping trajectories
+available at its evaluation time.
+
+Candidate-level scoring applies the temporal-history rule separately. A
+candidate is scored only when at least five distinct same-user trajectories
+both start and end before the candidate begins.
+
 ## Step 5: Run the Route-Deviation Evaluation
 
 Run:

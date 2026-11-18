@@ -417,6 +417,66 @@ def test_sorted_equivalence_across_candidate_positions():
         ]
 
 
+def test_overlapping_reference_is_excluded():
+    """A reference ending after the candidate starts must be excluded."""
+    candidate = _make_traj(
+        "user_1",
+        "candidate",
+        start_sec=200,
+        duration_sec=100,
+    )
+    overlapping_reference = _make_traj(
+        "user_1",
+        "reference_overlap",
+        start_sec=100,
+        duration_sec=150,
+    )
+
+    for builder in (
+        build_reference_set,
+        build_reference_set_from_sorted,
+    ):
+        result = builder(
+            [overlapping_reference],
+            candidate,
+            min_history=1,
+        )
+
+        assert len(result) == 0
+        assert result.is_sufficient is False
+        assert result.status == STATUS_INSUFFICIENT_HISTORY
+
+
+def test_reference_ending_before_candidate_is_allowed():
+    """A reference ending before the candidate starts remains eligible."""
+    candidate = _make_traj(
+        "user_1",
+        "candidate",
+        start_sec=200,
+        duration_sec=100,
+    )
+    valid_reference = _make_traj(
+        "user_1",
+        "reference_valid",
+        start_sec=100,
+        duration_sec=99,
+    )
+
+    for builder in (
+        build_reference_set,
+        build_reference_set_from_sorted,
+    ):
+        result = builder(
+            [valid_reference],
+            candidate,
+            min_history=1,
+        )
+
+        assert len(result) == 1
+        assert result.is_sufficient is True
+        assert result.trajectories[0].trajectory_id == "reference_valid"
+
+
 def test_segmented_children_count_as_one_original_trajectory():
     """Segments from one original trajectory count only once."""
     candidate = _make_traj("user_1", "candidate", start_sec=1000)

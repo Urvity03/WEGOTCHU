@@ -9,6 +9,7 @@ from typing import Sequence
 
 from .loader import Trajectory
 
+
 MIN_HISTORICAL_TRAJECTORIES: int = 5
 
 STATUS_SUFFICIENT: str = "SUFFICIENT"
@@ -79,9 +80,15 @@ def build_reference_set(
     """
     Build a chronological reference set for a candidate trajectory.
 
-    Only same-user trajectories that strictly precede the candidate are
-    eligible. Segments belonging to the same original trajectory count once.
-    The candidate and all of its child segments are excluded.
+    A reference trajectory must:
+
+    - Belong to the same user.
+    - Start before the candidate starts.
+    - End before the candidate starts.
+    - Belong to a different original trajectory.
+    - Not be a future or overlapping trajectory.
+
+    Segments from the same original trajectory count only once.
     """
     _validate_inputs(candidate_trajectory, min_history)
 
@@ -98,16 +105,25 @@ def build_reference_set(
 
         trajectory_parent_id = parent_trajectory_id(trajectory.trajectory_id)
 
+        # Exclude the candidate and all of its child segments.
         if trajectory_parent_id == candidate_parent_id:
             continue
 
-        trajectory_start_time = trajectory.points[0].timestamp
+        reference_start_time = trajectory.points[0].timestamp
+        reference_end_time = trajectory.points[-1].timestamp
 
-        if trajectory_start_time < candidate_start_time:
-            eligible_by_parent.setdefault(
-                trajectory_parent_id,
-                trajectory,
-            )
+        # Both the start and end must precede the candidate.
+        if reference_start_time >= candidate_start_time:
+            continue
+
+        if reference_end_time >= candidate_start_time:
+            continue
+
+        # Count multiple segments from one original trajectory once.
+        eligible_by_parent.setdefault(
+            trajectory_parent_id,
+            trajectory,
+        )
 
     eligible = sorted(
         eligible_by_parent.values(),
@@ -130,15 +146,13 @@ def build_reference_set_from_sorted(
     min_history: int = MIN_HISTORICAL_TRAJECTORIES,
 ) -> ReferenceSetResult:
     """
-    Build a reference set from trajectories sorted chronologically.
+    Build a reference set from chronologically sorted trajectories.
 
-    The input must be sorted by:
+    The input must be sorted by trajectory start timestamp and trajectory ID.
 
-    1. Trajectory start timestamp.
-    2. Trajectory ID as a deterministic tie-breaker.
-
-    Only trajectories strictly earlier than the candidate are considered.
-    Multiple segments from one original trajectory count as one history item.
+    The binary-search prefix filters trajectories that start before the
+    candidate. A second end-time check removes trajectories that overlap the
+    candidate start time.
     """
     _validate_inputs(candidate_trajectory, min_history)
 
@@ -162,9 +176,17 @@ def build_reference_set_from_sorted(
 
         trajectory_parent_id = parent_trajectory_id(trajectory.trajectory_id)
 
+        # Exclude the candidate and all of its child segments.
         if trajectory_parent_id == candidate_parent_id:
             continue
 
+        reference_end_time = trajectory.points[-1].timestamp
+
+        # A trajectory that ends at or after the candidate starts overlaps it.
+        if reference_end_time >= candidate_start_time:
+            continue
+
+        # Count multiple segments from one original trajectory once.
         eligible_by_parent.setdefault(
             trajectory_parent_id,
             trajectory,
