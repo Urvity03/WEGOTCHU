@@ -1,4 +1,4 @@
-"""Evaluation harness for WEGOTCHU personalized route-deviation baseline."""
+"""Evaluation harness for WEGOTCHU route-deviation baseline."""
 
 from __future__ import annotations
 
@@ -10,17 +10,21 @@ from typing import Sequence
 
 import pandas as pd
 
-# Add repository root to sys.path if not present
+# Add repository root to sys.path if not present.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ai.route_deviation.loader import Trajectory, load_trajectories  # noqa: E402
+from ai.route_deviation.loader import (  # noqa: E402
+    Trajectory,
+    load_trajectories,
+)
 from ai.route_deviation.reference import (  # noqa: E402
     MIN_HISTORICAL_TRAJECTORIES,
     STATUS_INSUFFICIENT_HISTORY,
-    build_reference_set,
     build_reference_set_from_sorted,
+    parent_trajectory_id,
 )
 from ai.route_deviation.scoring import (  # noqa: E402
     RouteDeviationResult,
@@ -32,7 +36,7 @@ from ai.route_deviation.scoring import (  # noqa: E402
 
 @dataclass(frozen=True)
 class EvaluationSummary:
-    """Summary metrics for baseline evaluation across validation and test splits."""
+    """Summary metrics across validation and test splits."""
 
     total_validation_candidates: int
     total_test_candidates: int
@@ -54,96 +58,84 @@ def evaluate_candidates(
     k_min: int = MIN_HISTORICAL_TRAJECTORIES,
 ) -> tuple[list[tuple[str, RouteDeviationResult]], EvaluationSummary]:
     """
-    Evaluate validation and test trajectories using expanding historical reference sets.
+    Evaluate validation and test trajectories safely.
 
-    Anti-leakage rules:
-    - Normalizers are fit exclusively per user from their static 'reference' trajectories.
-    - Each candidate uses an expanding historical set: all same-user trajectories strictly
-      preceding the candidate start time.
-    - If < k_min historical trajectories exist, returns INSUFFICIENT_HISTORY.
-    - Candidate trajectories are never used to fit normalizers.
+    Each candidate uses only same-user trajectories that both start and end
+    before the candidate starts. Multiple segments from one original
+    trajectory count once. Normalizers are fitted only from temporally safe
+    reference-split trajectories.
     """
-    # Map trajectory_id to split in manifest.
-    # Note: if loader split trajectories into segments (_seg0, _seg1),
-    # map using the parent trajectory_id prefix if exact id is not in manifest.
     split_map: dict[str, str] = {}
+
     for _, row in manifest.iterrows():
         split_map[str(row["trajectory_id"])] = str(row["split"])
 
-    def get_split(t_id: str) -> str | None:
-        if t_id in split_map:
-            return split_map[t_id]
+    def get_split(trajectory_id: str) -> str | None:
+        if trajectory_id in split_map:
+            return split_map[trajectory_id]
 
-        parent_id = t_id.split("_seg")[0]
+        parent_id = parent_trajectory_id(trajectory_id)
         return split_map.get(parent_id)
 
-    # 1. Identify users and organize their static reference trajectories for normalizer fitting.
-    user_reference_trajs: dict[str, list[Trajectory]] = {}
-
-    for traj in trajectories:
-        split = get_split(traj.trajectory_id)
-
-        if split == "reference":
-            user_reference_trajs.setdefault(traj.user_id, []).append(traj)
-
-    # Fit a static, leakage-safe normalizer per user using only reference trajectories.
-    user_normalizers: dict[str, ScoreNormalizer] = {}
-
-    for u_id, ref_list in user_reference_trajs.items():
-        if len(ref_list) >= 2:
-            user_normalizers[u_id] = fit_normalizer_from_references(ref_list)
-
-    # 2. Evaluate only validation and test candidates.
     eval_results: list[tuple[str, RouteDeviationResult]] = []
 
-    val_candidates = 0
+    validation_candidates = 0
     test_candidates = 0
-    val_success = 0
+    validation_success = 0
     test_success = 0
-    val_insufficient = 0
+    validation_insufficient = 0
     test_insufficient = 0
 
     successful_scores: list[float] = []
     successful_distances: list[float] = []
 
-    # Sort trajectories chronologically for deterministic expanding evaluation.
     sorted_trajectories = sorted(
         trajectories,
-        key=lambda t: (t.points[0].timestamp, t.trajectory_id),
+        key=lambda trajectory: (
+            trajectory.points[0].timestamp,
+            trajectory.trajectory_id,
+        ),
     )
 
-    # Index trajectories by user once, avoiding scans through unrelated users.
-    # Each user's list inherits the chronological ordering above.
     trajectories_by_user: dict[str, list[Trajectory]] = {}
 
-    for traj in sorted_trajectories:
-        trajectories_by_user.setdefault(traj.user_id, []).append(traj)
+    for trajectory in sorted_trajectories:
+        trajectories_by_user.setdefault(
+            trajectory.user_id,
+            [],
+        ).append(trajectory)
 
     for candidate in sorted_trajectories:
         split = get_split(candidate.trajectory_id)
 
-        if split not in ("validation", "test"):
+        if split not in {"validation", "test"}:
             continue
 
         if split == "validation":
-            val_candidates += 1
-        elif split == "test":
+            validation_candidates += 1
+        else:
             test_candidates += 1
 
-        # Search only this user's sorted trajectories using binary search.
-        # build_reference_set_from_sorted still enforces strict temporal precedence,
-        # excludes the candidate, and returns chronological references.
-        ref_result = build_reference_set_from_sorted(
+        reference_result = build_reference_set_from_sorted(
             user_trajectories=trajectories_by_user[candidate.user_id],
             candidate_trajectory=candidate,
             min_history=k_min,
         )
 
-        normalizer = user_normalizers.get(candidate.user_id)
+        normalizer_references = [
+            trajectory
+            for trajectory in reference_result.trajectories
+            if get_split(trajectory.trajectory_id) == "reference"
+        ]
+
+        normalizer: ScoreNormalizer | None = None
+
+        if len(normalizer_references) >= 2:
+            normalizer = fit_normalizer_from_references(normalizer_references)
 
         result = score_route_deviation(
             candidate_trajectory=candidate,
-            reference_set=ref_result,
+            reference_set=reference_result,
             normalizer=normalizer,
         )
 
@@ -151,13 +143,13 @@ def evaluate_candidates(
 
         if result.status == STATUS_INSUFFICIENT_HISTORY:
             if split == "validation":
-                val_insufficient += 1
+                validation_insufficient += 1
             else:
                 test_insufficient += 1
 
         elif result.status == "SUCCESS":
             if split == "validation":
-                val_success += 1
+                validation_success += 1
             else:
                 test_success += 1
 
@@ -173,27 +165,27 @@ def evaluate_candidates(
         sum(successful_scores) / len(successful_scores) if successful_scores else None
     )
 
-    dist_min = min(successful_distances) if successful_distances else None
-    dist_max = max(successful_distances) if successful_distances else None
-    dist_mean = (
+    distance_min = min(successful_distances) if successful_distances else None
+    distance_max = max(successful_distances) if successful_distances else None
+    distance_mean = (
         sum(successful_distances) / len(successful_distances)
         if successful_distances
         else None
     )
 
     summary = EvaluationSummary(
-        total_validation_candidates=val_candidates,
+        total_validation_candidates=validation_candidates,
         total_test_candidates=test_candidates,
-        successful_validation_scores=val_success,
+        successful_validation_scores=validation_success,
         successful_test_scores=test_success,
-        insufficient_history_validation=val_insufficient,
+        insufficient_history_validation=validation_insufficient,
         insufficient_history_test=test_insufficient,
         score_min=score_min,
         score_mean=score_mean,
         score_max=score_max,
-        raw_distance_min=dist_min,
-        raw_distance_mean=dist_mean,
-        raw_distance_max=dist_max,
+        raw_distance_min=distance_min,
+        raw_distance_mean=distance_mean,
+        raw_distance_max=distance_max,
     )
 
     return eval_results, summary
@@ -204,54 +196,65 @@ def print_summary(summary: EvaluationSummary) -> None:
     print("=" * 60)
     print("WEGOTCHU ROUTE-DEVIATION BASELINE EVALUATION SUMMARY")
     print("=" * 60)
-    print(f"Validation Candidates Total  : {summary.total_validation_candidates}")
-    print(f"Validation Successful Scores : {summary.successful_validation_scores}")
-    print(f"Validation Insufficient Hist : {summary.insufficient_history_validation}")
-    print("-" * 60)
-    print(f"Test Candidates Total        : {summary.total_test_candidates}")
-    print(f"Test Successful Scores       : {summary.successful_test_scores}")
-    print(f"Test Insufficient Hist       : {summary.insufficient_history_test}")
+
+    print("Validation Candidates Total  : " f"{summary.total_validation_candidates}")
+    print("Validation Successful Scores : " f"{summary.successful_validation_scores}")
+    print(
+        "Validation Insufficient Hist : " f"{summary.insufficient_history_validation}"
+    )
+
     print("-" * 60)
 
-    total_evaluated = (
+    print(f"Test Candidates Total        : {summary.total_test_candidates}")
+    print(f"Test Successful Scores       : {summary.successful_test_scores}")
+    print("Test Insufficient Hist       : " f"{summary.insufficient_history_test}")
+
+    print("-" * 60)
+
+    total_candidates = (
         summary.total_validation_candidates + summary.total_test_candidates
     )
+
     total_successful = (
         summary.successful_validation_scores + summary.successful_test_scores
     )
 
-    print(f"Total Candidates Evaluated   : {total_evaluated}")
+    print(f"Total Candidates Evaluated   : {total_candidates}")
     print(f"Total Successful Scores      : {total_successful}")
+
     print("-" * 60)
 
     if summary.score_mean is not None:
         print(
-            f"Normalized Score (min/mean/max): "
+            "Normalized Score (min/mean/max): "
             f"{summary.score_min:.4f} / "
             f"{summary.score_mean:.4f} / "
             f"{summary.score_max:.4f}"
         )
     else:
-        print("Normalized Score (min/mean/max): N/A (no successful scores)")
+        print("Normalized Score (min/mean/max): N/A")
 
     if summary.raw_distance_mean is not None:
         print(
-            f"Raw DTW Distance (m) (min/mean/max): "
+            "Raw DTW Distance (m) (min/mean/max): "
             f"{summary.raw_distance_min:.2f} / "
             f"{summary.raw_distance_mean:.2f} / "
             f"{summary.raw_distance_max:.2f}"
         )
     else:
-        print("Raw DTW Distance (m) (min/mean/max): N/A (no successful scores)")
+        print("Raw DTW Distance (m) (min/mean/max): N/A")
 
     print("=" * 60)
 
 
 def main() -> None:
+    """Run the command-line evaluation."""
     project_root = Path(__file__).resolve().parents[1]
 
     parser = argparse.ArgumentParser(
-        description="Evaluate WEGOTCHU route-deviation baseline on GeoLife split manifest."
+        description=(
+            "Evaluate WEGOTCHU route-deviation baseline " "on GeoLife split manifest."
+        )
     )
 
     parser.add_argument(
@@ -294,7 +297,8 @@ def main() -> None:
     if not args.manifest.is_file():
         raise FileNotFoundError(
             f"GeoLife split manifest not found at: {args.manifest}\n"
-            "Please run 'python scripts/create_geolife_split_manifest.py' first."
+            "Please run 'python scripts/create_geolife_split_manifest.py' "
+            "first."
         )
 
     print(f"Loading trajectories from {args.data}...")
