@@ -311,11 +311,13 @@ class RiskEngine:
             confidence = float(
                 min(0.95, max(0.70, sum(active_conf_vals) / len(active_conf_vals)))
             )
-            anom_scores = [
-                s
-                for s in (route_score, motion_score, audio_score)
-                if s is not None and s >= self.route_threshold
-            ]
+            anom_scores = []
+            if is_route_anomalous and route_score is not None:
+                anom_scores.append(route_score)
+            if is_motion_anomalous and motion_score is not None:
+                anom_scores.append(motion_score)
+            if is_audio_anomalous and audio_score is not None:
+                anom_scores.append(audio_score)
             raw_score = (
                 sum(anom_scores) / len(anom_scores) if anom_scores else audio_score
             )

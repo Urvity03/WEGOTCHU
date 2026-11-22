@@ -1,4 +1,4 @@
-﻿"""add sos alert dispatch and trip fields
+"""add sos alert dispatch and trip fields
 
 Revision ID: e5f9a12c3b4d
 Revises: c4e8a21f7b90

@@ -407,8 +407,8 @@ def complete_trip(
                     ):
                         from ..models.sos_alert import SOSAlert
 
-                        latest_lat = records[-1].get("latitude") if records else None
-                        latest_lon = records[-1].get("longitude") if records else None
+                        latest_lat = records[-1].latitude if records else None
+                        latest_lon = records[-1].longitude if records else None
                         auto_sos = SOSAlert(
                             user_id=pseudonymous_user_id,
                             status="received",
