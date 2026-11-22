@@ -208,6 +208,8 @@ var pinConfigured by remember {
         }.getOrDefault(false)
     )
 }
+var showCheckInDialog by remember { mutableStateOf(false) }
+var checkInErrorMessage by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(Unit) {
             refreshContacts = {
                 contacts = try {
@@ -246,10 +248,17 @@ LaunchedEffect(timerState) {
 
         timerRemainingSeconds = remaining
 
+        if (remaining in 1L..60L && !showCheckInDialog) {
+            showCheckInDialog = true
+        }
+
         if (remaining == 0L) {
+            showCheckInDialog = false
             isTimerSubmitting = true
 
             try {
+                com.wegotchu.app.service.SafetyMonitoringService.stop(this@MainActivity)
+
                 val token =
                     com.wegotchu.app.network.AuthTokenProvider.getToken()
 
@@ -264,8 +273,43 @@ LaunchedEffect(timerState) {
                 if (response.isSuccessful) {
                     safetyTimerStorage.clear()
                     timerState = null
+
+                    // Auto-escalate SOS alert to trusted contacts
+                    val currentContacts = withContext(Dispatchers.IO) {
+                        try { trustedContactRepository.getAll() } catch (_: Exception) { emptyList() }
+                    }
+                    val loc = locationCollector.latestLocation()
+
+                    withContext(Dispatchers.IO) {
+                        com.wegotchu.app.contacts.EmergencyDispatcher.dispatchLocalSms(
+                            context = this@MainActivity,
+                            contacts = currentContacts,
+                            latitude = loc?.latitude,
+                            longitude = loc?.longitude,
+                            note = "Automatic SOS: safety timer expired"
+                        )
+                    }
+
+                    val sosPayload = com.wegotchu.app.network.SOSAlertRequest(
+                        latitude = loc?.latitude,
+                        longitude = loc?.longitude,
+                        accuracyMeters = loc?.accuracyMeters?.toDouble(),
+                        note = "Automatic SOS escalation: safety timer expired without deactivation",
+                        tripId = activeTimer.tripId,
+                        recipients = currentContacts.map { it.phoneNumber }
+                    )
+
+                    try {
+                        com.wegotchu.app.network.RetrofitClient.api.createSOSAlert(
+                            authorization = "Bearer $token",
+                            payload = sosPayload
+                        )
+                    } catch (e: Exception) {
+                        Log.e("SafetyTimer", "Failed to submit automatic SOS", e)
+                    }
+
                     timerMessage =
-                        "Safety timer expired. Server status: EXPIRED_INACTIVE. No SOS notification was sent automatically."
+                        "Safety timer expired! Emergency SOS escalated to ${currentContacts.size} trusted contact(s)."
 		    return@LaunchedEffect
                 } else {
                     timerMessage =
@@ -326,12 +370,29 @@ onSOS = {
         lifecycleScope.launch {
             try {
                 val location = locationCollector.latestLocation()
+                val currentContacts = withContext(Dispatchers.IO) {
+                    try { trustedContactRepository.getAll() } catch (_: Exception) { emptyList() }
+                }
+                val recipientNumbers = currentContacts.map { it.phoneNumber }
+
+                // Attempt local direct SMS dispatch
+                val localDispatchedCount = withContext(Dispatchers.IO) {
+                    com.wegotchu.app.contacts.EmergencyDispatcher.dispatchLocalSms(
+                        context = this@MainActivity,
+                        contacts = currentContacts,
+                        latitude = location?.latitude,
+                        longitude = location?.longitude,
+                        note = "Manual SOS triggered from Android app"
+                    )
+                }
 
                 val payload = com.wegotchu.app.network.SOSAlertRequest(
                     latitude = location?.latitude,
                     longitude = location?.longitude,
                     accuracyMeters = location?.accuracyMeters?.toDouble(),
-                    note = "Manual SOS triggered from Android app"
+                    note = "Manual SOS triggered from Android app",
+                    tripId = timerState?.tripId,
+                    recipients = recipientNumbers
                 )
 
                 val token = com.wegotchu.app.network.AuthTokenProvider.getToken()
@@ -358,9 +419,13 @@ onSOS = {
                                     ignoreCase = true
                                 )
                             ) {
-                                "Emergency contacts have NOT been notified because notifications are not configured."
+                                if (localDispatchedCount > 0) {
+                                    "Direct SMS dispatched to $localDispatchedCount contact(s)."
+                                } else {
+                                    "Emergency contacts have NOT been notified (no contacts or SMS permission)."
+                                }
                             } else {
-                                "Notification status: ${alert.notificationStatus}."
+                                "Alert dispatched to ${alert.recipientsCount ?: recipientNumbers.size} contact(s) (Status: ${alert.notificationStatus})."
                             }
 
                         "SOS alert recorded successfully. $locationMessage $notificationMessage"
@@ -440,8 +505,9 @@ onStartSafetyTimer = { duration ->
                         safetyTimerStorage.save(newState)
                     }
 
+                    com.wegotchu.app.service.SafetyMonitoringService.start(this@MainActivity, body.tripId)
                     timerState = newState
-                    timerMessage = "Safety timer started successfully."
+                    timerMessage = "Safety timer started successfully. Continuous safety monitoring active."
                 } else {
                     timerMessage = "Could not start timer (HTTP ${response.code()})."
                 }
@@ -482,12 +548,15 @@ onDeactivateSafetyTimer = { pin ->
                                 )
 
                             if (response.isSuccessful) {
+                                com.wegotchu.app.service.SafetyMonitoringService.stop(this@MainActivity)
                                 withContext(Dispatchers.IO) {
                                     safetyTimerStorage.clear()
                                 }
+                                val infStatus = response.body()?.inferenceStatus
+                                val riskNote = if (infStatus != null) " (Inference: $infStatus)" else ""
                                 timerState = null
                                 timerRemainingSeconds = null
-                                timerMessage = "Safety timer deactivated successfully."
+                                timerMessage = "Safety timer deactivated successfully.$riskNote"
                             } else {
                                 timerMessage = "Could not deactivate timer (HTTP ${response.code()})."
                             }
@@ -516,27 +585,88 @@ onDeactivateSafetyTimer = { pin ->
                     .fillMaxSize()
                     .padding(innerPadding)
             )
+
+            if (showCheckInDialog) {
+                com.wegotchu.app.safety.SafetyCheckInDialog(
+                    initialCountdownSeconds = (timerRemainingSeconds ?: 60L).toInt().coerceIn(1, 60),
+                    reason = "Safety timer expires in under 60 seconds.",
+                    errorMessage = checkInErrorMessage,
+                    onConfirmSafe = { pin ->
+                        lifecycleScope.launch {
+                            val verification = withContext(Dispatchers.IO) {
+                                safetyPinStorage.verifyPin(pin)
+                            }
+                            if (verification == com.wegotchu.app.safety.SafetyPinStorage.VerificationResult.SUCCESS) {
+                                showCheckInDialog = false
+                                checkInErrorMessage = null
+
+                                val activeTimer = timerState
+                                if (activeTimer != null) {
+                                    try {
+                                        val token = com.wegotchu.app.network.AuthTokenProvider.getToken()
+                                        com.wegotchu.app.network.RetrofitClient.api.completeSafetyTimer(
+                                            authorization = "Bearer $token",
+                                            payload = com.wegotchu.app.network.CompleteSafetyTimerRequest(
+                                                tripId = activeTimer.tripId
+                                            )
+                                        )
+                                        com.wegotchu.app.service.SafetyMonitoringService.stop(this@MainActivity)
+                                        withContext(Dispatchers.IO) { safetyTimerStorage.clear() }
+                                        timerState = null
+                                        timerRemainingSeconds = null
+                                        timerMessage = "Safety confirmed. Timer deactivated successfully."
+                                    } catch (_: Exception) {
+                                        timerMessage = "Safety confirmed locally."
+                                    }
+                                }
+                            } else {
+                                checkInErrorMessage = "Incorrect PIN. Please try again."
+                            }
+                        }
+                    },
+                    onTriggerSOS = {
+                        showCheckInDialog = false
+                        lifecycleScope.launch {
+                            val loc = locationCollector.latestLocation()
+                            val curContacts = withContext(Dispatchers.IO) {
+                                try { trustedContactRepository.getAll() } catch (_: Exception) { emptyList() }
+                            }
+                            withContext(Dispatchers.IO) {
+                                com.wegotchu.app.contacts.EmergencyDispatcher.dispatchLocalSms(
+                                    context = this@MainActivity,
+                                    contacts = curContacts,
+                                    latitude = loc?.latitude,
+                                    longitude = loc?.longitude,
+                                    note = "Emergency SOS from Safety Check-in"
+                                )
+                            }
+                            val token = com.wegotchu.app.network.AuthTokenProvider.getToken()
+                            try {
+                                com.wegotchu.app.network.RetrofitClient.api.createSOSAlert(
+                                    authorization = "Bearer $token",
+                                    payload = com.wegotchu.app.network.SOSAlertRequest(
+                                        latitude = loc?.latitude,
+                                        longitude = loc?.longitude,
+                                        accuracyMeters = loc?.accuracyMeters?.toDouble(),
+                                        note = "Emergency confirmed during Safety Check-in",
+                                        recipients = curContacts.map { it.phoneNumber }
+                                    )
+                                )
+                            } catch (_: Exception) {}
+                            sosMessage = "SOS triggered from check-in dialog."
+                        }
+                    },
+                    onTimeout = {
+                        showCheckInDialog = false
+                    }
+                )
+            }
         }
     }
 }
     }
 private fun parseServerTimestamp(value: String): Long? {
-    val formats = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-        "yyyy-MM-dd'T'HH:mm:ssXXX"
-    )
-
-    for (format in formats) {
-        try {
-            val parser = SimpleDateFormat(format, Locale.US)
-            parser.isLenient = false
-            return parser.parse(value)?.time
-        } catch (_: Exception) {
-            // Try the next supported timestamp format.
-        }
-    }
-
-    return null
+    return com.wegotchu.app.safety.TimestampParser.parseServerTimestamp(value)
 }
 
     override fun onResume() {

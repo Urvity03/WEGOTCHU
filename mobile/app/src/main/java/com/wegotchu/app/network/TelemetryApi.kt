@@ -19,7 +19,10 @@ data class SOSAlertRequest(
     val longitude: Double? = null,
     @SerializedName("accuracy_meters")
     val accuracyMeters: Double? = null,
-    val note: String? = null
+    val note: String? = null,
+    @SerializedName("trip_id")
+    val tripId: String? = null,
+    val recipients: List<String>? = null
 )
 
 data class SOSAlertResponse(
@@ -33,7 +36,11 @@ data class SOSAlertResponse(
     @SerializedName("created_at")
     val createdAt: String,
     @SerializedName("notification_status")
-    val notificationStatus: String
+    val notificationStatus: String,
+    @SerializedName("recipients_count")
+    val recipientsCount: Int? = 0,
+    @SerializedName("trip_id")
+    val tripId: String? = null
 )
 
 data class StartSafetyTimerRequest(
@@ -66,7 +73,9 @@ data class SafetyTimerResponse(
     @SerializedName("timer_duration_seconds")
     val timerDurationSeconds: Int? = null,
     @SerializedName("timer_expires_at")
-    val timerExpiresAt: String? = null
+    val timerExpiresAt: String? = null,
+    @SerializedName("inference_status")
+    val inferenceStatus: String? = null
 )
 
 interface TelemetryApi {

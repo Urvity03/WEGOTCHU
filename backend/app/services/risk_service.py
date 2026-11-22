@@ -83,6 +83,7 @@ class RiskService:
         records: Sequence[Any],
         trajectory_id: str | None = None,
         historical_trajectories: Sequence[Trajectory] | None = None,
+        audio_result: Any | None = None,
     ) -> RiskAssessment:
         """
         Evaluate a sequence of telemetry records and produce a structured RiskAssessment.
@@ -218,4 +219,5 @@ class RiskService:
             route_result=route_result,
             motion_result=motion_result,
             speed_mps=speed_mps,
+            audio_result=audio_result,
         )

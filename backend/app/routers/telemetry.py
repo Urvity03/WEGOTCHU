@@ -392,10 +392,49 @@ def complete_trip(
                     records=records,
                     trajectory_id=trip.trip_id,
                     historical_trajectories=historical_trajectories,
+                    audio_result=payload.acoustic_distress_score,
                 )
                 inference_status = "COMPLETED"
                 if risk_assessment.signals:
                     target_status = TripStatus.COMPLETED_ANOMALOUS
+                    from ai.risk_engine.models import RecommendedAction
+
+                    if (
+                        risk_assessment.risk_level in {RiskLevel.HIGH, RiskLevel.EMERGENCY}
+                        or risk_assessment.recommended_action
+                        == RecommendedAction.DISPATCH_EMERGENCY
+                    ):
+                        from ..models.sos_alert import SOSAlert
+
+                        latest_lat = (
+                            records[-1].get("latitude") if records else None
+                        )
+                        latest_lon = (
+                            records[-1].get("longitude") if records else None
+                        )
+                        auto_sos = SOSAlert(
+                            user_id=pseudonymous_user_id,
+                            status="received",
+                            source="ai_high_risk",
+                            trip_id=payload.trip_id,
+                            latitude=(
+                                float(latest_lat)
+                                if isinstance(latest_lat, (int, float))
+                                else None
+                            ),
+                            longitude=(
+                                float(latest_lon)
+                                if isinstance(latest_lon, (int, float))
+                                else None
+                            ),
+                            note=(
+                                f"Automatic SOS escalation: high risk anomaly detected on trip '{payload.trip_id}'. "
+                                f"Signals: {', '.join(risk_assessment.signals)}"
+                            ),
+                            created_at=ended_at,
+                            notification_status="pending",
+                        )
+                        db.add(auto_sos)
                 elif check_trip_coverage_eligibility(trip, records, risk_assessment):
                     target_status = TripStatus.COMPLETED_NORMAL
         except Exception as exc:
@@ -520,6 +559,32 @@ def expire_trip(
             new_status=TripStatus.EXPIRED_INACTIVE,
             ended_at=now_utc,
         )
+
+        from ..models.sos_alert import SOSAlert
+
+        latest_record = (
+            db.query(TelemetryRecord)
+            .filter(TelemetryRecord.trip_id == payload.trip_id)
+            .order_by(TelemetryRecord.timestamp.desc())
+            .first()
+        )
+        auto_sos = SOSAlert(
+            user_id=pseudonymous_user_id,
+            status="received",
+            source="timer_expired",
+            trip_id=payload.trip_id,
+            latitude=latest_record.latitude if latest_record else None,
+            longitude=latest_record.longitude if latest_record else None,
+            accuracy_meters=latest_record.accuracy_meters if latest_record else None,
+            note=(
+                f"Automatic SOS escalation: safety timer for trip '{payload.trip_id}' "
+                "expired without PIN deactivation."
+            ),
+            created_at=now_utc,
+            notification_status="pending",
+        )
+        db.add(auto_sos)
+        db.commit()
     except TripLifecycleError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -668,7 +733,10 @@ def get_trip_briefing(
     else:
         missing_modalities.append("route")
 
-    missing_modalities.append("acoustic")  # Not yet integrated in v0.1
+    if assessment.telemetry_summary.acoustic_anomaly_score is not None:
+        available_modalities.append("acoustic")
+    else:
+        missing_modalities.append("acoustic")
 
     audience_val = BriefingAudience.USER
     display_name = "User"

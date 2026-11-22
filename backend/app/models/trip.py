@@ -169,6 +169,7 @@ class Trip(Base):
 
     __table_args__ = (
         Index("ix_trips_user_status_started", "user_id", "status", "started_at"),
+        Index("ix_trips_status_timer_expires_at", "status", "timer_expires_at"),
     )
 
 
@@ -203,6 +204,7 @@ class CompleteTripRequest(BaseModel):
     crisis: bool = False
     anomalous: bool = False
     has_anomaly: bool = False
+    acoustic_distress_score: float | None = None
 
 
 class TripResponse(BaseModel):

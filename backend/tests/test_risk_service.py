@@ -739,3 +739,39 @@ def test_cross_user_and_future_trajectories_isolated():
     # Since 2 < 5 (min_history), status MUST be INSUFFICIENT_HISTORY, and route_anomaly must be None!
     assert assessment.risk_vector.route_anomaly is None
     assert assessment.location_status == "available"
+
+
+def test_risk_service_with_acoustic_distress_escalation():
+    """Verify acoustic distress signal integrates into RiskService evaluation."""
+    from ai.risk_engine.models import RecommendedAction, RiskLevel
+
+    service = RiskService(raise_on_detector_error=True)
+    t0 = BASE_TIME
+    records = [
+        _make_record(
+            timestamp=t0 + timedelta(milliseconds=0),
+            accel_x=0.0,
+            accel_y=9.81,
+            accel_z=0.0,
+            rec_id=1,
+        ),
+        _make_record(
+            timestamp=t0 + timedelta(milliseconds=20),
+            accel_x=30.0,
+            accel_y=35.0,
+            accel_z=20.0,  # Sudden jerk spike
+            rec_id=2,
+        ),
+    ]
+
+    # Co-occurring anomalous motion + acoustic distress yields HIGH with PRE_ALERT
+    assessment = service.evaluate_telemetry(
+        user_id=TEST_USER_ID,
+        records=records,
+        audio_result={"audio_distress_score": 0.88, "confidence": 0.85},
+    )
+    assert assessment.risk_level == RiskLevel.HIGH
+    assert assessment.recommended_action == RecommendedAction.PRE_ALERT
+    assert "acoustic_distress" in assessment.signals
+    assert "unusual_motion" in assessment.signals
+    assert assessment.risk_vector.acoustic_anomaly == 0.88

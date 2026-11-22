@@ -68,8 +68,9 @@ class SafetyPinStorage(context: Context) {
             ?: return VerificationResult.NOT_CONFIGURED
 
         val now = System.currentTimeMillis()
+        val elapsed = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(0L)
 
-        if (now < record.lockoutUntil) {
+        if (now < record.lockoutUntil || (elapsed > 0L && elapsed < sessionLockoutUntilElapsedRealtime)) {
             return VerificationResult.LOCKED_OUT
         }
 
@@ -82,6 +83,7 @@ class SafetyPinStorage(context: Context) {
                 actualHash
             )
         ) {
+            sessionLockoutUntilElapsedRealtime = 0L
             saveRecord(record.copy(attempts = 0, lockoutUntil = 0L))
             return VerificationResult.SUCCESS
         }
@@ -89,6 +91,9 @@ class SafetyPinStorage(context: Context) {
         val attempts = record.attempts + 1
 
         val updatedRecord = if (attempts >= MAX_ATTEMPTS) {
+            if (elapsed > 0L) {
+                sessionLockoutUntilElapsedRealtime = elapsed + LOCKOUT_DURATION_MS
+            }
             record.copy(
                 attempts = 0,
                 lockoutUntil = now + LOCKOUT_DURATION_MS
@@ -263,5 +268,8 @@ class SafetyPinStorage(context: Context) {
         const val GCM_IV_LENGTH_BYTES = 12
         const val MAX_ATTEMPTS = 5
         const val LOCKOUT_DURATION_MS = 5 * 60 * 1000L
+
+        @Volatile
+        var sessionLockoutUntilElapsedRealtime: Long = 0L
     }
 }

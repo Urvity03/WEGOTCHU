@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.database import Base
+from backend.app.models.sos_alert import SOSAlert
 from backend.app.models.telemetry import TelemetryPayload
 from backend.app.models.telemetry_record import TelemetryRecord
 from backend.app.models.trip import (
@@ -900,6 +901,17 @@ def test_expire_due_safety_timers_expires_overdue_trip(repo):
     assert expired_count == 1
     assert trip.status == TripStatus.EXPIRED_INACTIVE.value
     assert trip.ended_at == now
+
+    # Verify automatic SOS alert record creation on timer expiration
+    sos_record = (
+        repo.db.query(SOSAlert)
+        .filter(SOSAlert.trip_id == "timer-overdue")
+        .first()
+    )
+    assert sos_record is not None
+    assert sos_record.source == "timer_expired"
+    assert sos_record.user_id == "timer-user"
+    assert "overdue safety timer" in sos_record.note
 
 
 def test_expire_due_safety_timers_keeps_future_timer_active(repo):

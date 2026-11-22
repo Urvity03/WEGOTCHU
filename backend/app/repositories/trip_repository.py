@@ -256,6 +256,21 @@ class TripRepository:
                     ended_at=now_utc,
                     commit=False,
                 )
+                from ..models.sos_alert import SOSAlert
+
+                auto_sos = SOSAlert(
+                    user_id=trip.user_id,
+                    status="received",
+                    source="timer_expired",
+                    trip_id=trip.trip_id,
+                    note=(
+                        f"Automatic SOS escalation: overdue safety timer for trip "
+                        f"{trip.trip_id} expired without deactivation."
+                    ),
+                    created_at=now_utc,
+                    notification_status="pending",
+                )
+                self.db.add(auto_sos)
                 expired_count += 1
 
             if expired_count:

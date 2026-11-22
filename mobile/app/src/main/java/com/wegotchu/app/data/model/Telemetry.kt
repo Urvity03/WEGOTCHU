@@ -58,5 +58,8 @@ data class TelemetryPayload(
     val batteryLevel: Double,
 
     @SerializedName("network_status")
-    val networkStatus: String
+    val networkStatus: String,
+
+    @SerializedName("trip_id")
+    val tripId: String? = null
 )

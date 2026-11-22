@@ -59,3 +59,19 @@ class SOSAlert(Base):
         Text,
         nullable=True,
     )
+
+    trip_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    notification_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="pending",
+    )
+
+    recipients_count: Mapped[int] = mapped_column(
+        default=0,
+    )

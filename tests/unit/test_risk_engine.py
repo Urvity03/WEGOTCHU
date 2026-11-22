@@ -1424,3 +1424,90 @@ def test_repeated_evaluation_is_strictly_deterministic():
     assert res1.risk_vector == res2.risk_vector
     assert res1.telemetry_summary.speed_mps == res2.telemetry_summary.speed_mps
     assert res1.calibration_metadata == res2.calibration_metadata
+
+
+# ---------------------------------------------------------------------------
+# Section 6 — Acoustic Distress Signal Integration Tests (Member 1 + Member 4)
+# ---------------------------------------------------------------------------
+
+
+def test_single_acoustic_distress_yields_unusual_monitor():
+    """Single acoustic distress anomaly yields UNUSUAL with MONITOR."""
+    engine = RiskEngine()
+    assessment = engine.evaluate(
+        user_id="usr_audio_001",
+        audio_result={"audio_distress_score": 0.85, "confidence": 0.80},
+    )
+    assert assessment.risk_level == RiskLevel.UNUSUAL
+    assert assessment.recommended_action == RecommendedAction.MONITOR
+    assert "acoustic_distress" in assessment.signals
+    assert assessment.risk_vector.acoustic_anomaly == 0.85
+    assert assessment.telemetry_summary.acoustic_anomaly_score == 0.85
+
+
+def test_acoustic_distress_with_abnormal_motion_escalates_to_high_pre_alert():
+    """
+    Multi-signal distress: acoustic distress + abnormal motion escalates to HIGH
+    with PRE_ALERT countdown (docs/architecture/ai-architecture.md §2 Table 2 & §3).
+    """
+    engine = RiskEngine()
+    motion_res = _make_motion_result(score=0.88, motion_state="erratic_struggle")
+    assessment = engine.evaluate(
+        user_id="usr_audio_002",
+        motion_result=motion_res,
+        audio_result={"audio_distress_score": 0.90, "confidence": 0.85},
+    )
+    assert assessment.risk_level == RiskLevel.HIGH
+    assert assessment.recommended_action == RecommendedAction.PRE_ALERT
+    assert "acoustic_distress" in assessment.signals
+    assert "unusual_motion" in assessment.signals
+    assert assessment.confidence >= 0.70
+    assert assessment.risk_vector.acoustic_anomaly == 0.90
+    assert assessment.risk_vector.kinematic_anomaly == 0.88
+
+
+def test_acoustic_distress_with_route_deviation_yields_elevated_user_check():
+    """Acoustic distress + route deviation yields ELEVATED with USER_CHECK."""
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.75, distance_meters=200.0)
+    assessment = engine.evaluate(
+        user_id="usr_audio_003",
+        route_result=route_res,
+        audio_result=0.82,  # Direct float distress score
+    )
+    assert assessment.risk_level == RiskLevel.ELEVATED
+    assert assessment.recommended_action == RecommendedAction.USER_CHECK
+    assert "acoustic_distress" in assessment.signals
+    assert "route_deviation" in assessment.signals
+    assert assessment.risk_vector.acoustic_anomaly == 0.82
+
+
+def test_all_three_anomalies_yield_high_pre_alert():
+    """Route + motion + acoustic distress all anomalous yields HIGH with PRE_ALERT."""
+    engine = RiskEngine()
+    route_res = _make_route_result(score=0.90, distance_meters=350.0)
+    motion_res = _make_motion_result(score=0.85, motion_state="struggle")
+    assessment = engine.evaluate(
+        user_id="usr_audio_004",
+        route_result=route_res,
+        motion_result=motion_res,
+        audio_result={"audio_distress_score": 0.92, "confidence": 0.88},
+    )
+    assert assessment.risk_level == RiskLevel.HIGH
+    assert assessment.recommended_action == RecommendedAction.PRE_ALERT
+    assert set(assessment.signals) == {"route_deviation", "unusual_motion", "acoustic_distress"}
+
+
+def test_acoustic_normal_with_motion_normal_yields_normal():
+    """All modalities present and normal yields NORMAL."""
+    engine = RiskEngine()
+    motion_res = _make_motion_result(score=0.15, motion_state="walking")
+    assessment = engine.evaluate(
+        user_id="usr_audio_005",
+        motion_result=motion_res,
+        audio_result={"audio_distress_score": 0.10, "confidence": 0.90},
+    )
+    assert assessment.risk_level == RiskLevel.NORMAL
+    assert assessment.recommended_action == RecommendedAction.NONE
+    assert not assessment.signals
+    assert assessment.confidence >= 0.80

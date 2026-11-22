@@ -15,7 +15,7 @@ class SafetyTimerStorage(context: Context) {
         .getSharedPreferences("safety_timer", Context.MODE_PRIVATE)
 
     fun save(state: SafetyTimerState) {
-        require(runCatching { UUID.fromString(state.tripId) }.isSuccess) {
+        require(state.tripId.isNotBlank() && state.tripId.length <= 64) {
             "Invalid safety timer trip ID"
         }
         require(state.expiresAt.isNotBlank()) {
@@ -41,9 +41,9 @@ class SafetyTimerStorage(context: Context) {
 
         if (
             tripId.isNullOrBlank() ||
+            tripId.length > 64 ||
             expiresAt.isNullOrBlank() ||
-            duration !in 60..86400 ||
-            runCatching { UUID.fromString(tripId) }.isFailure
+            duration !in 60..86400
         ) {
             return null
         }

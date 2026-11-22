@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 
@@ -8,6 +8,7 @@ from .database import SessionLocal
 from .repositories.trip_repository import TripRepository
 from .routers.telemetry import router as telemetry_router
 from .routers.sos import router as sos_router
+from .routers.perception import router as perception_router
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ app = FastAPI(
 
 app.include_router(telemetry_router)
 app.include_router(sos_router)
+app.include_router(perception_router)
 
 
 @app.get("/api/v1/status")

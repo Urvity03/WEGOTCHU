@@ -11,10 +11,20 @@ from sqlalchemy.pool import StaticPool
 from backend.app.auth import SECRET_KEY, create_access_token
 from backend.app.database import Base, get_db
 from backend.app.main import app
+from backend.app.models.sos_alert import SOSAlert
 from backend.app.models.telemetry_record import TelemetryRecord
 from backend.app.models.trip import Trip, TripStatus
 from backend.app.repositories.trip_repository import TripRepository
+from backend.app.services.risk_service import RiskService
 from backend.app.services.telemetry_adapter import pseudonymize_identifier
+from ai.risk_engine.models import (
+    CalibrationMetadata,
+    RecommendedAction,
+    RiskAssessment,
+    RiskLevel,
+    RiskVector,
+    TelemetrySummary,
+)
 
 # -------------------------------------------------------------------
 # Test database
@@ -593,6 +603,16 @@ def test_expire_trip_successfully_after_deadline():
 
     assert data["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
     assert data["ended_at"] is not None
+
+    # Verify auto-SOS alert was created for the expired trip
+    check_db = TestingSessionLocal()
+    try:
+        sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+        assert sos is not None
+        assert sos.source == "timer_expired"
+        assert sos.status == "received"
+    finally:
+        check_db.close()
 
 
 def test_expire_trip_repeated_request_is_idempotent():
@@ -1839,3 +1859,149 @@ def test_direct_coverage_eligibility_policy_semantics():
         )
         is False
     )
+
+
+def test_complete_trip_auto_sos_escalation_on_high_risk():
+    trip_id = "trip-high-risk-auto-sos"
+    start_resp = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_resp.status_code == 200
+
+    # Persist records
+    db = TestingSessionLocal()
+    try:
+        db.add(
+            TelemetryRecord(
+                version="0.1",
+                device_id=TEST_DEVICE_ID,
+                trip_id=trip_id,
+                timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                latitude=28.6139,
+                longitude=77.2090,
+                accuracy_meters=5.0,
+                accelerometer_x=0.0,
+                accelerometer_y=9.81,
+                accelerometer_z=0.0,
+                battery_level=0.9,
+                network_status="WIFI",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    high_risk_assessment = RiskAssessment(
+        user_id=pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY),
+        risk_level=RiskLevel.HIGH,
+        confidence=0.88,
+        signals=("route_deviation", "unusual_motion"),
+        location_status="available",
+        recommended_action=RecommendedAction.PRE_ALERT,
+        risk_vector=RiskVector(kinematic_anomaly=0.85, route_anomaly=0.90),
+        telemetry_summary=TelemetrySummary(motion_status="SUCCESS", route_status="SUCCESS"),
+        calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
+    )
+
+    with patch.object(
+        RiskService,
+        "evaluate_telemetry",
+        return_value=high_risk_assessment,
+    ):
+        resp = client.post(
+            "/api/v1/telemetry/trips/complete",
+            json={"trip_id": trip_id},
+            headers=auth_headers(),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+
+        # Verify auto-SOS record created
+        check_db = TestingSessionLocal()
+        try:
+            sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+            assert sos is not None
+            assert sos.source == "ai_high_risk"
+            assert sos.status == "received"
+            assert "high risk anomaly detected" in sos.note
+        finally:
+            check_db.close()
+
+
+def test_complete_trip_with_acoustic_distress_escalation():
+    """Verify acoustic_distress_score in CompleteTripRequest fuses into HIGH risk auto-SOS."""
+    trip_id = "trip-acoustic-complete-001"
+    start_resp = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_resp.status_code == 200
+
+    # Persist motion records with jerk
+    db = TestingSessionLocal()
+    try:
+        db.add_all([
+            TelemetryRecord(
+                version="0.1",
+                device_id=TEST_DEVICE_ID,
+                trip_id=trip_id,
+                timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                latitude=28.6139,
+                longitude=77.2090,
+                accuracy_meters=5.0,
+                accelerometer_x=0.0,
+                accelerometer_y=9.81,
+                accelerometer_z=0.0,
+                battery_level=0.9,
+                network_status="WIFI",
+            ),
+            TelemetryRecord(
+                version="0.1",
+                device_id=TEST_DEVICE_ID,
+                trip_id=trip_id,
+                timestamp=datetime(2026, 9, 26, 17, 0, 1, tzinfo=timezone.utc),
+                latitude=28.6140,
+                longitude=77.2091,
+                accuracy_meters=5.0,
+                accelerometer_x=35.0,  # Sudden jerk spike -> unusual_motion
+                accelerometer_y=35.0,
+                accelerometer_z=20.0,
+                battery_level=0.9,
+                network_status="WIFI",
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={
+            "trip_id": trip_id,
+            "acoustic_distress_score": 0.92,
+        },
+        headers=auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+    assert data["inference_status"] == "COMPLETED"
+    assert "acoustic_distress" in data["risk_assessment"]["signals"]
+    assert "unusual_motion" in data["risk_assessment"]["signals"]
+    assert data["risk_assessment"]["risk_level"] == "HIGH"
+    assert data["risk_assessment"]["recommended_action"] == "PRE_ALERT"
+
+    # Verify auto-SOS escalation occurred
+    check_db = TestingSessionLocal()
+    try:
+        sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+        assert sos is not None
+        assert sos.source == "ai_high_risk"
+        assert sos.status == "received"
+        assert "acoustic_distress" in sos.note
+    finally:
+        check_db.close()

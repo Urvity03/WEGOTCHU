@@ -8,6 +8,8 @@ class SOSAlertCreate(BaseModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0, le=100000)
     note: str | None = Field(default=None, max_length=1000)
+    trip_id: str | None = Field(default=None, max_length=64)
+    recipients: list[str] | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_location(self):
@@ -34,3 +36,5 @@ class SOSAlertResponse(BaseModel):
     accuracy_meters: float | None
     created_at: str
     notification_status: str
+    recipients_count: int = 0
+    trip_id: str | None = None
