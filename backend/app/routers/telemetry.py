@@ -407,8 +407,20 @@ def complete_trip(
                     ):
                         from ..models.sos_alert import SOSAlert
 
-                        latest_lat = records[-1].latitude if records else None
-                        latest_lon = records[-1].longitude if records else None
+                        latest_record = records[-1] if records else None
+
+                        latest_lat = (
+                            latest_record.get("latitude")
+                            if isinstance(latest_record, dict)
+                            else getattr(latest_record, "latitude", None)
+                        )
+
+                        latest_lon = (
+                            latest_record.get("longitude")
+                            if isinstance(latest_record, dict)
+                            else getattr(latest_record, "longitude", None)
+                        )
+
                         auto_sos = SOSAlert(
                             user_id=pseudonymous_user_id,
                             status="received",
@@ -438,10 +450,7 @@ def complete_trip(
             db.rollback()
             inference_status = "FAILED"
             risk_assessment = None
-            logger.warning(
-                "Trip risk assessment failed; leaving trip unverified (%s)",
-                type(exc).__name__,
-            )
+            logger.exception("Trip risk assessment failed; leaving trip unverified")
 
     try:
         updated_trip = repo.update_trip_status(
