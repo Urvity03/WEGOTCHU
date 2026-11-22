@@ -90,7 +90,9 @@ def test_dispatch_alert_with_twilio_success():
     mock_messages = MagicMock()
     mock_client.messages = mock_messages
 
-    with patch.dict("sys.modules", {"twilio.rest": MagicMock(Client=lambda sid, tok: mock_client)}):
+    with patch.dict(
+        "sys.modules", {"twilio.rest": MagicMock(Client=lambda sid, tok: mock_client)}
+    ):
         res = service.dispatch_alert(
             user_id="usr_tw",
             recipients=["+15551112222", "+15553334444"],

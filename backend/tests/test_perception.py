@@ -21,7 +21,9 @@ def auth_headers():
     return {"Authorization": f"Bearer {token}"}
 
 
-def make_test_wav_bytes(duration_seconds: float = 1.0, sample_rate: int = 16000) -> bytes:
+def make_test_wav_bytes(
+    duration_seconds: float = 1.0, sample_rate: int = 16000
+) -> bytes:
     """Generate in-memory WAV audio bytes for testing."""
     num_samples = int(duration_seconds * sample_rate)
     t = np.linspace(0, duration_seconds, num_samples, endpoint=False)

@@ -1901,7 +1901,9 @@ def test_complete_trip_auto_sos_escalation_on_high_risk():
         location_status="available",
         recommended_action=RecommendedAction.PRE_ALERT,
         risk_vector=RiskVector(kinematic_anomaly=0.85, route_anomaly=0.90),
-        telemetry_summary=TelemetrySummary(motion_status="SUCCESS", route_status="SUCCESS"),
+        telemetry_summary=TelemetrySummary(
+            motion_status="SUCCESS", route_status="SUCCESS"
+        ),
         calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
     )
 
@@ -1944,36 +1946,38 @@ def test_complete_trip_with_acoustic_distress_escalation():
     # Persist motion records with jerk
     db = TestingSessionLocal()
     try:
-        db.add_all([
-            TelemetryRecord(
-                version="0.1",
-                device_id=TEST_DEVICE_ID,
-                trip_id=trip_id,
-                timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
-                latitude=28.6139,
-                longitude=77.2090,
-                accuracy_meters=5.0,
-                accelerometer_x=0.0,
-                accelerometer_y=9.81,
-                accelerometer_z=0.0,
-                battery_level=0.9,
-                network_status="WIFI",
-            ),
-            TelemetryRecord(
-                version="0.1",
-                device_id=TEST_DEVICE_ID,
-                trip_id=trip_id,
-                timestamp=datetime(2026, 9, 26, 17, 0, 1, tzinfo=timezone.utc),
-                latitude=28.6140,
-                longitude=77.2091,
-                accuracy_meters=5.0,
-                accelerometer_x=35.0,  # Sudden jerk spike -> unusual_motion
-                accelerometer_y=35.0,
-                accelerometer_z=20.0,
-                battery_level=0.9,
-                network_status="WIFI",
-            ),
-        ])
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                    latitude=28.6139,
+                    longitude=77.2090,
+                    accuracy_meters=5.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                ),
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=datetime(2026, 9, 26, 17, 0, 1, tzinfo=timezone.utc),
+                    latitude=28.6140,
+                    longitude=77.2091,
+                    accuracy_meters=5.0,
+                    accelerometer_x=35.0,  # Sudden jerk spike -> unusual_motion
+                    accelerometer_y=35.0,
+                    accelerometer_z=20.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                ),
+            ]
+        )
         db.commit()
     finally:
         db.close()

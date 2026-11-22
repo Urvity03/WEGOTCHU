@@ -146,7 +146,9 @@ class RiskEngine:
             elif hasattr(audio_result, "audio_distress_score"):
                 raw_a_score = getattr(audio_result, "audio_distress_score")
                 raw_a_conf = getattr(audio_result, "confidence", None)
-            elif isinstance(audio_result, (int, float)) and not isinstance(audio_result, bool):
+            elif isinstance(audio_result, (int, float)) and not isinstance(
+                audio_result, bool
+            ):
                 raw_a_score = audio_result
                 raw_a_conf = None
             else:
@@ -300,19 +302,28 @@ class RiskEngine:
                 and motion_result.confidence is not None
                 and math.isfinite(motion_result.confidence)
             ):
-                active_conf_vals.append(float(max(0.0, min(1.0, motion_result.confidence))))
+                active_conf_vals.append(
+                    float(max(0.0, min(1.0, motion_result.confidence)))
+                )
             if audio_conf is not None:
                 active_conf_vals.append(audio_conf)
 
-            confidence = float(min(0.95, max(0.70, sum(active_conf_vals) / len(active_conf_vals))))
+            confidence = float(
+                min(0.95, max(0.70, sum(active_conf_vals) / len(active_conf_vals)))
+            )
             anom_scores = [
-                s for s in (route_score, motion_score, audio_score)
+                s
+                for s in (route_score, motion_score, audio_score)
                 if s is not None and s >= self.route_threshold
             ]
-            raw_score = sum(anom_scores) / len(anom_scores) if anom_scores else audio_score
+            raw_score = (
+                sum(anom_scores) / len(anom_scores) if anom_scores else audio_score
+            )
             calibrated_score = float(min(1.0, raw_score + 0.20))
 
-        elif (is_route_anomalous and is_motion_anomalous) or (is_route_anomalous and is_audio_anomalous):
+        elif (is_route_anomalous and is_motion_anomalous) or (
+            is_route_anomalous and is_audio_anomalous
+        ):
             # Co-occurring anomalies: simultaneous route deviation and unusual motion/audio (without motion+audio co-occurrence).
             # Escalate to ELEVATED and trigger gentle haptic user check-in.
             # IMPORTANT: Statistical anomaly scores alone NEVER trigger HIGH or EMERGENCY.
@@ -349,7 +360,9 @@ class RiskEngine:
             action = RecommendedAction.MONITOR
             if is_audio_anomalous:
                 active_score = audio_score
-                confidence = float(min(0.90, max(0.65, audio_conf if audio_conf is not None else 0.75)))
+                confidence = float(
+                    min(0.90, max(0.65, audio_conf if audio_conf is not None else 0.75))
+                )
             elif is_motion_anomalous and not is_route_anomalous:
                 # When motion is the anomalous modality, scale confidence with motion detector confidence
                 if motion_result is None or motion_result.confidence is None:
@@ -377,7 +390,9 @@ class RiskEngine:
             risk_level = RiskLevel.UNUSUAL
             action = RecommendedAction.MONITOR
             confidence = 0.35  # Degraded confidence reflecting detector failure
-            available_scores = [s for s in (route_score, motion_score, audio_score) if s is not None]
+            available_scores = [
+                s for s in (route_score, motion_score, audio_score) if s is not None
+            ]
             raw_score = float(max(available_scores)) if available_scores else None
             calibrated_score = raw_score
 
@@ -388,7 +403,9 @@ class RiskEngine:
             # High confidence when multiple modalities observed normal; reduced when partial
             observed_count = sum(1 for h in (has_route, has_motion, has_audio) if h)
             confidence = 0.88 if observed_count >= 2 else 0.65
-            available_scores = [s for s in (route_score, motion_score, audio_score) if s is not None]
+            available_scores = [
+                s for s in (route_score, motion_score, audio_score) if s is not None
+            ]
             raw_score = float(max(available_scores)) if available_scores else None
             calibrated_score = raw_score
 

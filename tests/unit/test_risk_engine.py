@@ -1495,7 +1495,11 @@ def test_all_three_anomalies_yield_high_pre_alert():
     )
     assert assessment.risk_level == RiskLevel.HIGH
     assert assessment.recommended_action == RecommendedAction.PRE_ALERT
-    assert set(assessment.signals) == {"route_deviation", "unusual_motion", "acoustic_distress"}
+    assert set(assessment.signals) == {
+        "route_deviation",
+        "unusual_motion",
+        "acoustic_distress",
+    }
 
 
 def test_acoustic_normal_with_motion_normal_yields_normal():

@@ -40,7 +40,9 @@ from backend.app.models.trip import Trip, TripStatus
 from backend.app.repositories.trip_repository import TripRepository
 from backend.app.services.telemetry_adapter import pseudonymize_identifier
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger("WEGOTCHU-SIMULATOR")
 
 DEMO_DEVICE_ID = "dev_viva_student_demo"
@@ -191,7 +193,9 @@ def run_scenario_normal(client, headers, SessionLocal):
 
 def run_scenario_high_risk(client, headers, SessionLocal):
     logger.info("==================================================================")
-    logger.info("SCENARIO B: High-Risk Multimodal Emergency (Deviation + Struggle + Scream)")
+    logger.info(
+        "SCENARIO B: High-Risk Multimodal Emergency (Deviation + Struggle + Scream)"
+    )
     logger.info("==================================================================")
 
     trip_id = "trip-demo-crisis-002"
@@ -243,7 +247,9 @@ def run_scenario_high_risk(client, headers, SessionLocal):
         ]
         db.add_all(records)
         db.commit()
-        logger.info("2. Streamed anomalous telemetry: spatial deviation + sudden kinematic struggle.")
+        logger.info(
+            "2. Streamed anomalous telemetry: spatial deviation + sudden kinematic struggle."
+        )
     finally:
         db.close()
 
@@ -273,7 +279,9 @@ def run_scenario_high_risk(client, headers, SessionLocal):
         sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
         assert sos is not None
         logger.info("4. AUTOMATIC SOS ESCALATION VERIFIED:")
-        logger.info("   -> Alert ID: %d, Source: %s, Status: %s", sos.id, sos.source, sos.status)
+        logger.info(
+            "   -> Alert ID: %d, Source: %s, Status: %s", sos.id, sos.source, sos.status
+        )
         logger.info("   -> Coordinates: (%s, %s)", sos.latitude, sos.longitude)
         logger.info("   -> Note: %s", sos.note)
     finally:
@@ -358,13 +366,19 @@ def run_scenario_contact_dispatch(client, headers, SessionLocal):
     logger.info("   -> Contacts Notified Count: %d", res["recipients_count"])
     assert res["notification_status"] in ("simulated_dispatch", "dispatched")
     assert res["recipients_count"] == 2
-    logger.info("2. Dispatch result verified: Safe simulated delivery to 2 trusted contacts.")
+    logger.info(
+        "2. Dispatch result verified: Safe simulated delivery to 2 trusted contacts."
+    )
     return True
 
 
 def main():
     parser = argparse.ArgumentParser(description="WEGOTCHU Demo Trip Simulator")
-    parser.add_argument("--scenario", choices=["all", "normal", "crisis", "timer", "dispatch"], default="all")
+    parser.add_argument(
+        "--scenario",
+        choices=["all", "normal", "crisis", "timer", "dispatch"],
+        default="all",
+    )
     args = parser.parse_args()
 
     client, headers, SessionLocal = get_demo_client()
@@ -376,13 +390,21 @@ def main():
 
     results = {}
     if args.scenario in ("all", "normal"):
-        results["Scenario A (Normal Commute)"] = run_scenario_normal(client, headers, SessionLocal)
+        results["Scenario A (Normal Commute)"] = run_scenario_normal(
+            client, headers, SessionLocal
+        )
     if args.scenario in ("all", "crisis"):
-        results["Scenario B (Multimodal Crisis)"] = run_scenario_high_risk(client, headers, SessionLocal)
+        results["Scenario B (Multimodal Crisis)"] = run_scenario_high_risk(
+            client, headers, SessionLocal
+        )
     if args.scenario in ("all", "timer"):
-        results["Scenario C (Safety Timer Expiry)"] = run_scenario_timer_expiry(client, headers, SessionLocal)
+        results["Scenario C (Safety Timer Expiry)"] = run_scenario_timer_expiry(
+            client, headers, SessionLocal
+        )
     if args.scenario in ("all", "dispatch"):
-        results["Scenario D (Contact Notification)"] = run_scenario_contact_dispatch(client, headers, SessionLocal)
+        results["Scenario D (Contact Notification)"] = run_scenario_contact_dispatch(
+            client, headers, SessionLocal
+        )
 
     logger.info("==================================================================")
     logger.info("SIMULATION SUMMARY — ALL SCENARIOS PASSED")

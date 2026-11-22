@@ -400,18 +400,15 @@ def complete_trip(
                     from ai.risk_engine.models import RecommendedAction
 
                     if (
-                        risk_assessment.risk_level in {RiskLevel.HIGH, RiskLevel.EMERGENCY}
+                        risk_assessment.risk_level
+                        in {RiskLevel.HIGH, RiskLevel.EMERGENCY}
                         or risk_assessment.recommended_action
                         == RecommendedAction.DISPATCH_EMERGENCY
                     ):
                         from ..models.sos_alert import SOSAlert
 
-                        latest_lat = (
-                            records[-1].get("latitude") if records else None
-                        )
-                        latest_lon = (
-                            records[-1].get("longitude") if records else None
-                        )
+                        latest_lat = records[-1].get("latitude") if records else None
+                        latest_lon = records[-1].get("longitude") if records else None
                         auto_sos = SOSAlert(
                             user_id=pseudonymous_user_id,
                             status="received",

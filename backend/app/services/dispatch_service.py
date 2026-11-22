@@ -65,10 +65,14 @@ class DispatchService:
 
         location_part = "Location unavailable"
         if latitude is not None and longitude is not None:
-            location_part = f"Location: https://maps.google.com/?q={latitude:.6f},{longitude:.6f}"
+            location_part = (
+                f"Location: https://maps.google.com/?q={latitude:.6f},{longitude:.6f}"
+            )
 
         note_part = f" Note: {note}" if note else ""
-        source_label = "AUTOMATIC TIMER EXPIRY" if "timer" in source.lower() else "MANUAL SOS"
+        source_label = (
+            "AUTOMATIC TIMER EXPIRY" if "timer" in source.lower() else "MANUAL SOS"
+        )
 
         return (
             f"[WEGOTCHU EMERGENCY ALERT] {source_label} for user '{user_id}'. "
@@ -145,7 +149,10 @@ class DispatchService:
                     detail=f"Dispatched via Twilio to {delivered_count} recipient(s)",
                 )
             except Exception as exc:
-                logger.error("Twilio SMS dispatch failed (%s); falling back to simulated dispatch", exc)
+                logger.error(
+                    "Twilio SMS dispatch failed (%s); falling back to simulated dispatch",
+                    exc,
+                )
 
         # Simulated dispatch for tests and academic demonstration
         logger.warning(

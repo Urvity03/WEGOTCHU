@@ -904,9 +904,7 @@ def test_expire_due_safety_timers_expires_overdue_trip(repo):
 
     # Verify automatic SOS alert record creation on timer expiration
     sos_record = (
-        repo.db.query(SOSAlert)
-        .filter(SOSAlert.trip_id == "timer-overdue")
-        .first()
+        repo.db.query(SOSAlert).filter(SOSAlert.trip_id == "timer-overdue").first()
     )
     assert sos_record is not None
     assert sos_record.source == "timer_expired"
