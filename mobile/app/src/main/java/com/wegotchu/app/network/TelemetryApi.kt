@@ -19,7 +19,10 @@ data class SOSAlertRequest(
     val longitude: Double? = null,
     @SerializedName("accuracy_meters")
     val accuracyMeters: Double? = null,
-    val note: String? = null
+    val note: String? = null,
+    @SerializedName("trip_id")
+    val tripId: String? = null,
+    val recipients: List<String>? = null
 )
 
 data class SOSAlertResponse(
@@ -33,7 +36,46 @@ data class SOSAlertResponse(
     @SerializedName("created_at")
     val createdAt: String,
     @SerializedName("notification_status")
-    val notificationStatus: String
+    val notificationStatus: String,
+    @SerializedName("recipients_count")
+    val recipientsCount: Int? = 0,
+    @SerializedName("trip_id")
+    val tripId: String? = null
+)
+
+data class StartSafetyTimerRequest(
+    @SerializedName("trip_id")
+    val tripId: String,
+    @SerializedName("timer_duration_seconds")
+    val timerDurationSeconds: Int
+)
+
+data class ExpireSafetyTimerRequest(
+    @SerializedName("trip_id")
+    val tripId: String
+)
+
+data class CompleteSafetyTimerRequest(
+    @SerializedName("trip_id")
+    val tripId: String
+)
+
+data class SafetyTimerResponse(
+    val status: String,
+    @SerializedName("trip_id")
+    val tripId: String,
+    @SerializedName("trip_status")
+    val tripStatus: String,
+    @SerializedName("started_at")
+    val startedAt: String? = null,
+    @SerializedName("ended_at")
+    val endedAt: String? = null,
+    @SerializedName("timer_duration_seconds")
+    val timerDurationSeconds: Int? = null,
+    @SerializedName("timer_expires_at")
+    val timerExpiresAt: String? = null,
+    @SerializedName("inference_status")
+    val inferenceStatus: String? = null
 )
 
 interface TelemetryApi {
@@ -49,4 +91,22 @@ interface TelemetryApi {
         @Header("Authorization") authorization: String,
         @Body payload: SOSAlertRequest
     ): Response<SOSAlertResponse>
+
+    @POST("api/v1/telemetry/trips/start")
+    suspend fun startSafetyTimer(
+        @Header("Authorization") authorization: String,
+        @Body payload: StartSafetyTimerRequest
+    ): Response<SafetyTimerResponse>
+
+    @POST("api/v1/telemetry/trips/expire")
+    suspend fun expireSafetyTimer(
+        @Header("Authorization") authorization: String,
+        @Body payload: ExpireSafetyTimerRequest
+    ): Response<SafetyTimerResponse>
+
+    @POST("api/v1/telemetry/trips/complete")
+    suspend fun completeSafetyTimer(
+        @Header("Authorization") authorization: String,
+        @Body payload: CompleteSafetyTimerRequest
+    ): Response<SafetyTimerResponse>
 }

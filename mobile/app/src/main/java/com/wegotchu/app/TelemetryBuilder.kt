@@ -17,7 +17,7 @@ class TelemetryBuilder(
     private val networkCollector: NetworkCollector
 ) {
 
-    fun build(): TelemetryPayload? {
+    fun build(tripId: String? = null): TelemetryPayload? {
 
         val location = locationCollector.latestLocation()
 
@@ -78,7 +78,9 @@ class TelemetryBuilder(
 
             batteryLevel = batteryCollector.getBatteryLevel(),
 
-            networkStatus = networkCollector.getNetworkStatus()
+            networkStatus = networkCollector.getNetworkStatus(),
+
+            tripId = tripId
         )
 
         Log.d(

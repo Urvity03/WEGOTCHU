@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel
 from sqlalchemy import DateTime, Index, Integer, String, TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
 from .telemetry import TripId
+from pydantic import BaseModel, Field
 
 
 class UTCDateTime(TypeDecorator):
@@ -144,6 +144,15 @@ class Trip(Base):
         UTCDateTime,
         nullable=True,
     )
+    timer_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    timer_expires_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime,
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime,
@@ -160,6 +169,7 @@ class Trip(Base):
 
     __table_args__ = (
         Index("ix_trips_user_status_started", "user_id", "status", "started_at"),
+        Index("ix_trips_status_timer_expires_at", "status", "timer_expires_at"),
     )
 
 
@@ -173,6 +183,13 @@ class StartTripRequest(BaseModel):
 
     trip_id: TripId
     started_at: datetime | None = None
+    timer_duration_seconds: int | None = Field(default=None, ge=60, le=86400)
+
+
+class ExpireTripRequest(BaseModel):
+    """Request payload to expire a Safety Mode trip after timer deadline."""
+
+    trip_id: TripId
 
 
 class CompleteTripRequest(BaseModel):
@@ -187,6 +204,7 @@ class CompleteTripRequest(BaseModel):
     crisis: bool = False
     anomalous: bool = False
     has_anomaly: bool = False
+    acoustic_distress_score: float | None = None
 
 
 class TripResponse(BaseModel):
@@ -197,6 +215,8 @@ class TripResponse(BaseModel):
     trip_status: str
     started_at: datetime
     ended_at: datetime | None = None
+    timer_duration_seconds: int | None = None
+    timer_expires_at: datetime | None = None
 
 
 class TripBriefingRequest(BaseModel):

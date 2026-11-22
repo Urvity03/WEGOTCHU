@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -131,3 +131,23 @@ def test_user_can_read_own_sos_alert():
 
     assert response.status_code == 200
     assert response.json()["id"] == alert_id
+
+
+def test_create_sos_alert_with_recipients_dispatches_alert():
+    response = client.post(
+        "/api/v1/sos",
+        json={
+            "latitude": 28.6139,
+            "longitude": 77.2090,
+            "accuracy_meters": 5.0,
+            "note": "Emergency in progress",
+            "recipients": ["+919876543210", "+919876543211"],
+        },
+        headers=auth_headers("user_dispatch_test"),
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["notification_status"] in {"simulated_dispatch", "dispatched"}
+    assert data["recipients_count"] == 2
+    assert data["source"] == "manual"

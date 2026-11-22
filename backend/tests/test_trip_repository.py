@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.database import Base
+from backend.app.models.sos_alert import SOSAlert
 from backend.app.models.telemetry import TelemetryPayload
 from backend.app.models.telemetry_record import TelemetryRecord
 from backend.app.models.trip import (
@@ -876,3 +877,99 @@ def test_eligible_reference_trips_exclude_candidate_id(repo):
     )
 
     assert [trip.trip_id for trip in candidates] == ["eligible-history"]
+
+
+# -------------------------------------------------------------------
+# Automatic Safety Timer Reconciliation Tests
+# -------------------------------------------------------------------
+
+
+def test_expire_due_safety_timers_expires_overdue_trip(repo):
+    now = datetime.now(timezone.utc)
+    trip = repo.create_trip(
+        trip_id="timer-overdue",
+        user_id="timer-user",
+        started_at=now - timedelta(minutes=10),
+        timer_duration_seconds=300,
+    )
+    trip.timer_expires_at = now - timedelta(seconds=1)
+    repo.db.commit()
+
+    expired_count = repo.expire_due_safety_timers(now=now)
+
+    repo.db.refresh(trip)
+    assert expired_count == 1
+    assert trip.status == TripStatus.EXPIRED_INACTIVE.value
+    assert trip.ended_at == now
+
+    # Verify automatic SOS alert record creation on timer expiration
+    sos_record = (
+        repo.db.query(SOSAlert).filter(SOSAlert.trip_id == "timer-overdue").first()
+    )
+    assert sos_record is not None
+    assert sos_record.source == "timer_expired"
+    assert sos_record.user_id == "timer-user"
+    assert "overdue safety timer" in sos_record.note
+
+
+def test_expire_due_safety_timers_keeps_future_timer_active(repo):
+    now = datetime.now(timezone.utc)
+    trip = repo.create_trip(
+        trip_id="timer-future",
+        user_id="timer-user",
+        started_at=now,
+        timer_duration_seconds=300,
+    )
+
+    expired_count = repo.expire_due_safety_timers(now=now)
+
+    repo.db.refresh(trip)
+    assert expired_count == 0
+    assert trip.status == TripStatus.INITIALIZED.value
+    assert trip.ended_at is None
+
+
+def test_expire_due_safety_timers_ignores_trip_without_timer(repo):
+    now = datetime.now(timezone.utc)
+    trip = repo.create_trip(
+        trip_id="timer-not-configured",
+        user_id="timer-user",
+        started_at=now - timedelta(minutes=10),
+    )
+
+    expired_count = repo.expire_due_safety_timers(now=now + timedelta(days=1))
+
+    repo.db.refresh(trip)
+    assert expired_count == 0
+    assert trip.status == TripStatus.INITIALIZED.value
+    assert trip.ended_at is None
+
+
+def test_expire_due_safety_timers_preserves_completed_trip(repo):
+    now = datetime.now(timezone.utc)
+    trip = repo.create_trip(
+        trip_id="timer-completed",
+        user_id="timer-user",
+        started_at=now - timedelta(minutes=10),
+        timer_duration_seconds=300,
+    )
+    trip.timer_expires_at = now - timedelta(seconds=1)
+    repo.db.commit()
+
+    repo.update_trip_status(
+        trip_id=trip.trip_id,
+        user_id=trip.user_id,
+        new_status=TripStatus.ACTIVE,
+    )
+    repo.update_trip_status(
+        trip_id=trip.trip_id,
+        user_id=trip.user_id,
+        new_status=TripStatus.COMPLETED_NORMAL,
+        ended_at=now - timedelta(seconds=2),
+    )
+
+    expired_count = repo.expire_due_safety_timers(now=now)
+
+    repo.db.refresh(trip)
+    assert expired_count == 0
+    assert trip.status == TripStatus.COMPLETED_NORMAL.value

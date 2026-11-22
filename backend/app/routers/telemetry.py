@@ -20,6 +20,7 @@ from ..models.trip import (
     TERMINAL_TRIP_STATUSES,
     CompleteTripRequest,
     StartTripRequest,
+    ExpireTripRequest,
     Trip,
     TripBriefingRequest,
     TripStatus,
@@ -270,6 +271,7 @@ def start_trip(
             user_id=pseudonymous_user_id,
             started_at=started_at,
             status=TripStatus.INITIALIZED,
+            timer_duration_seconds=payload.timer_duration_seconds,
         )
     except TripOwnershipError as exc:
         raise HTTPException(
@@ -296,6 +298,8 @@ def start_trip(
         "trip_status": trip.status,
         "started_at": trip.started_at,
         "ended_at": trip.ended_at,
+        "timer_duration_seconds": trip.timer_duration_seconds,
+        "timer_expires_at": trip.timer_expires_at,
     }
 
 
@@ -388,20 +392,65 @@ def complete_trip(
                     records=records,
                     trajectory_id=trip.trip_id,
                     historical_trajectories=historical_trajectories,
+                    audio_result=payload.acoustic_distress_score,
                 )
                 inference_status = "COMPLETED"
                 if risk_assessment.signals:
                     target_status = TripStatus.COMPLETED_ANOMALOUS
+                    from ai.risk_engine.models import RecommendedAction
+
+                    if (
+                        risk_assessment.risk_level
+                        in {RiskLevel.HIGH, RiskLevel.EMERGENCY}
+                        or risk_assessment.recommended_action
+                        == RecommendedAction.DISPATCH_EMERGENCY
+                    ):
+                        from ..models.sos_alert import SOSAlert
+
+                        latest_record = records[-1] if records else None
+
+                        latest_lat = (
+                            latest_record.get("latitude")
+                            if isinstance(latest_record, dict)
+                            else getattr(latest_record, "latitude", None)
+                        )
+
+                        latest_lon = (
+                            latest_record.get("longitude")
+                            if isinstance(latest_record, dict)
+                            else getattr(latest_record, "longitude", None)
+                        )
+
+                        auto_sos = SOSAlert(
+                            user_id=pseudonymous_user_id,
+                            status="received",
+                            source="ai_high_risk",
+                            trip_id=payload.trip_id,
+                            latitude=(
+                                float(latest_lat)
+                                if isinstance(latest_lat, (int, float))
+                                else None
+                            ),
+                            longitude=(
+                                float(latest_lon)
+                                if isinstance(latest_lon, (int, float))
+                                else None
+                            ),
+                            note=(
+                                f"Automatic SOS escalation: high risk anomaly detected on trip '{payload.trip_id}'. "
+                                f"Signals: {', '.join(risk_assessment.signals)}"
+                            ),
+                            created_at=ended_at,
+                            notification_status="pending",
+                        )
+                        db.add(auto_sos)
                 elif check_trip_coverage_eligibility(trip, records, risk_assessment):
                     target_status = TripStatus.COMPLETED_NORMAL
         except Exception as exc:
             db.rollback()
             inference_status = "FAILED"
             risk_assessment = None
-            logger.warning(
-                "Trip risk assessment failed; leaving trip unverified (%s)",
-                type(exc).__name__,
-            )
+            logger.exception("Trip risk assessment failed; leaving trip unverified")
 
     try:
         updated_trip = repo.update_trip_status(
@@ -447,6 +496,124 @@ def complete_trip(
             if risk_assessment is not None
             else None
         ),
+    }
+
+
+@router.post("/telemetry/trips/expire")
+def expire_trip(
+    payload: ExpireTripRequest,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Expire a trip only after its server-controlled safety timer deadline."""
+
+    pseudonymous_user_id = pseudonymize_identifier(current_user_id, SECRET_KEY)
+    repo = TripRepository(db)
+
+    trip = repo.get_trip(payload.trip_id)
+
+    if trip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trip '{payload.trip_id}' not found",
+        )
+
+    if trip.user_id != pseudonymous_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trip does not belong to authenticated user",
+        )
+
+    # Repeated expiry requests must remain idempotent.
+    if trip.status == TripStatus.EXPIRED_INACTIVE.value:
+        return {
+            "status": "accepted",
+            "trip_id": trip.trip_id,
+            "trip_status": trip.status,
+            "ended_at": trip.ended_at,
+        }
+
+    # Other terminal states cannot be changed.
+    if trip.status in {s.value for s in TERMINAL_TRIP_STATUSES}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Trip is already finalized and cannot be expired",
+        )
+
+    if trip.timer_expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No safety timer is configured for this trip",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    deadline = trip.timer_expires_at
+
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+
+    if now_utc < deadline:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Safety timer has not expired yet",
+        )
+
+    try:
+        updated_trip = repo.update_trip_status(
+            trip_id=payload.trip_id,
+            user_id=pseudonymous_user_id,
+            new_status=TripStatus.EXPIRED_INACTIVE,
+            ended_at=now_utc,
+        )
+
+        from ..models.sos_alert import SOSAlert
+
+        latest_record = (
+            db.query(TelemetryRecord)
+            .filter(TelemetryRecord.trip_id == payload.trip_id)
+            .order_by(TelemetryRecord.timestamp.desc())
+            .first()
+        )
+        auto_sos = SOSAlert(
+            user_id=pseudonymous_user_id,
+            status="received",
+            source="timer_expired",
+            trip_id=payload.trip_id,
+            latitude=latest_record.latitude if latest_record else None,
+            longitude=latest_record.longitude if latest_record else None,
+            accuracy_meters=latest_record.accuracy_meters if latest_record else None,
+            note=(
+                f"Automatic SOS escalation: safety timer for trip '{payload.trip_id}' "
+                "expired without PIN deactivation."
+            ),
+            created_at=now_utc,
+            notification_status="pending",
+        )
+        db.add(auto_sos)
+        db.commit()
+    except TripLifecycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except TripOwnershipError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to expire trip")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to expire trip",
+        ) from exc
+
+    return {
+        "status": "accepted",
+        "trip_id": updated_trip.trip_id,
+        "trip_status": updated_trip.status,
+        "ended_at": updated_trip.ended_at,
     }
 
 
@@ -572,7 +739,10 @@ def get_trip_briefing(
     else:
         missing_modalities.append("route")
 
-    missing_modalities.append("acoustic")  # Not yet integrated in v0.1
+    if assessment.telemetry_summary.acoustic_anomaly_score is not None:
+        available_modalities.append("acoustic")
+    else:
+        missing_modalities.append("acoustic")
 
     audience_val = BriefingAudience.USER
     display_name = "User"

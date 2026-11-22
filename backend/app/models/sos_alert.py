@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Float, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -58,4 +58,20 @@ class SOSAlert(Base):
     note: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+    )
+
+    trip_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    notification_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="pending",
+    )
+
+    recipients_count: Mapped[int] = mapped_column(
+        default=0,
     )

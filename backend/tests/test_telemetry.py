@@ -11,10 +11,20 @@ from sqlalchemy.pool import StaticPool
 from backend.app.auth import SECRET_KEY, create_access_token
 from backend.app.database import Base, get_db
 from backend.app.main import app
+from backend.app.models.sos_alert import SOSAlert
 from backend.app.models.telemetry_record import TelemetryRecord
-from backend.app.models.trip import TripStatus
+from backend.app.models.trip import Trip, TripStatus
 from backend.app.repositories.trip_repository import TripRepository
+from backend.app.services.risk_service import RiskService
 from backend.app.services.telemetry_adapter import pseudonymize_identifier
+from ai.risk_engine.models import (
+    CalibrationMetadata,
+    RecommendedAction,
+    RiskAssessment,
+    RiskLevel,
+    RiskVector,
+    TelemetrySummary,
+)
 
 # -------------------------------------------------------------------
 # Test database
@@ -461,7 +471,8 @@ def test_start_trip_successful():
     assert data["trip_status"] == TripStatus.INITIALIZED.value
     assert data["started_at"] is not None
     assert data["ended_at"] is None
-
+    assert data["timer_duration_seconds"] is None
+    assert data["timer_expires_at"] is None
     # Verify DB persistence
     db = TestingSessionLocal()
     try:
@@ -469,6 +480,8 @@ def test_start_trip_successful():
         trip = repo.get_trip(trip_id)
         assert trip is not None
         assert trip.status == TripStatus.INITIALIZED.value
+        assert trip.timer_duration_seconds is None
+        assert trip.timer_expires_at is None
         expected_user = pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY)
         assert trip.user_id == expected_user
         assert trip.user_id != TEST_DEVICE_ID
@@ -484,23 +497,264 @@ def test_start_trip_missing_authentication():
     assert response.status_code == 401
 
 
-def test_start_trip_duplicate_idempotency_same_user():
-    trip_id = "trip-idempotent-start"
-    res1 = client.post(
+def test_start_trip_with_safety_timer():
+    trip_id = "trip-safety-timer-001"
+    duration = 300
+
+    response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": duration,
+        },
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["timer_duration_seconds"] == duration
+    assert data["timer_expires_at"] is not None
+
+    # Verify timer persistence in the database.
+    db = TestingSessionLocal()
+    try:
+        repo = TripRepository(db)
+        trip = repo.get_trip(trip_id)
+
+        assert trip is not None
+        assert trip.timer_duration_seconds == duration
+        assert trip.timer_expires_at is not None
+    finally:
+        db.close()
+
+
+def test_start_trip_rejects_invalid_timer_duration():
+    invalid_durations = [30, 86401, 0, -60]
+
+    for index, duration in enumerate(invalid_durations):
+        response = client.post(
+            "/api/v1/telemetry/trips/start",
+            json={
+                "trip_id": f"trip-invalid-timer-{index}",
+                "timer_duration_seconds": duration,
+            },
+            headers=auth_headers(),
+        )
+
+        assert response.status_code == 422
+
+
+def test_expire_trip_rejects_early_expiry():
+    trip_id = "trip-early-expiry-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 409
+    assert "not expired yet" in response.json()["detail"]
+
+
+def test_expire_trip_successfully_after_deadline():
+    trip_id = "trip-expiry-success-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    # Simulate the timer deadline having passed.
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
+    assert data["ended_at"] is not None
+
+    # Verify auto-SOS alert was created for the expired trip
+    check_db = TestingSessionLocal()
+    try:
+        sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+        assert sos is not None
+        assert sos.source == "timer_expired"
+        assert sos.status == "received"
+    finally:
+        check_db.close()
+
+
+def test_expire_trip_repeated_request_is_idempotent():
+    trip_id = "trip-expiry-repeat-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    first_response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert first_response.status_code == 200
+
+    first_ended_at = first_response.json()["ended_at"]
+
+    second_response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert second_response.status_code == 200
+    assert second_response.json()["trip_status"] == TripStatus.EXPIRED_INACTIVE.value
+    assert second_response.json()["ended_at"] == first_ended_at
+
+
+def test_expire_trip_rejects_other_users_trip():
+    trip_id = "trip-expiry-owner-001"
+
+    start_response = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
+        headers=auth_headers("user_A"),
+    )
+    assert start_response.status_code == 200
+
+    db = TestingSessionLocal()
+    try:
+        trip = db.query(Trip).filter(Trip.trip_id == trip_id).first()
+        assert trip is not None
+
+        trip.timer_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers("user_B"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Trip does not belong to authenticated user"
+
+
+def test_expire_trip_rejects_trip_without_timer():
+    trip_id = "trip-expiry-no-timer-001"
+
+    start_response = client.post(
         "/api/v1/telemetry/trips/start",
         json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "No safety timer is configured for this trip"
+
+
+def test_expire_trip_returns_404_for_unknown_trip():
+    response = client.post(
+        "/api/v1/telemetry/trips/expire",
+        json={"trip_id": "trip-does-not-exist-001"},
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 404
+
+
+def test_start_trip_duplicate_idempotency_same_user():
+    trip_id = "trip-idempotent-start"
+
+    # First request starts a 5-minute timer.
+    res1 = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 300,
+        },
         headers=auth_headers(),
     )
     assert res1.status_code == 200
 
+    first_data = res1.json()
+    original_expiry = first_data["timer_expires_at"]
+
+    # Duplicate request attempts to change it to 10 minutes.
     res2 = client.post(
         "/api/v1/telemetry/trips/start",
-        json={"trip_id": trip_id},
+        json={
+            "trip_id": trip_id,
+            "timer_duration_seconds": 600,
+        },
         headers=auth_headers(),
     )
     assert res2.status_code == 200
-    assert res1.json()["trip_id"] == res2.json()["trip_id"]
-    assert res1.json()["started_at"] == res2.json()["started_at"]
+
+    second_data = res2.json()
+
+    assert first_data["trip_id"] == second_data["trip_id"]
+    assert first_data["started_at"] == second_data["started_at"]
+    assert second_data["timer_duration_seconds"] == 300
+    assert second_data["timer_expires_at"] == original_expiry
 
 
 def test_start_trip_duplicate_cross_user_rejected():
@@ -1605,3 +1859,153 @@ def test_direct_coverage_eligibility_policy_semantics():
         )
         is False
     )
+
+
+def test_complete_trip_auto_sos_escalation_on_high_risk():
+    trip_id = "trip-high-risk-auto-sos"
+    start_resp = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_resp.status_code == 200
+
+    # Persist records
+    db = TestingSessionLocal()
+    try:
+        db.add(
+            TelemetryRecord(
+                version="0.1",
+                device_id=TEST_DEVICE_ID,
+                trip_id=trip_id,
+                timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                latitude=28.6139,
+                longitude=77.2090,
+                accuracy_meters=5.0,
+                accelerometer_x=0.0,
+                accelerometer_y=9.81,
+                accelerometer_z=0.0,
+                battery_level=0.9,
+                network_status="WIFI",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    high_risk_assessment = RiskAssessment(
+        user_id=pseudonymize_identifier(TEST_DEVICE_ID, SECRET_KEY),
+        risk_level=RiskLevel.HIGH,
+        confidence=0.88,
+        signals=("route_deviation", "unusual_motion"),
+        location_status="available",
+        recommended_action=RecommendedAction.PRE_ALERT,
+        risk_vector=RiskVector(kinematic_anomaly=0.85, route_anomaly=0.90),
+        telemetry_summary=TelemetrySummary(
+            motion_status="SUCCESS", route_status="SUCCESS"
+        ),
+        calibration_metadata=CalibrationMetadata(method="deterministic_heuristic"),
+    )
+
+    with patch.object(
+        RiskService,
+        "evaluate_telemetry",
+        return_value=high_risk_assessment,
+    ):
+        resp = client.post(
+            "/api/v1/telemetry/trips/complete",
+            json={"trip_id": trip_id},
+            headers=auth_headers(),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+
+        # Verify auto-SOS record created
+        check_db = TestingSessionLocal()
+        try:
+            sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+            assert sos is not None
+            assert sos.source == "ai_high_risk"
+            assert sos.status == "received"
+            assert "high risk anomaly detected" in sos.note
+        finally:
+            check_db.close()
+
+
+def test_complete_trip_with_acoustic_distress_escalation():
+    """Verify acoustic_distress_score in CompleteTripRequest fuses into HIGH risk auto-SOS."""
+    trip_id = "trip-acoustic-complete-001"
+    start_resp = client.post(
+        "/api/v1/telemetry/trips/start",
+        json={"trip_id": trip_id},
+        headers=auth_headers(),
+    )
+    assert start_resp.status_code == 200
+
+    # Persist motion records with jerk
+    db = TestingSessionLocal()
+    try:
+        db.add_all(
+            [
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=datetime(2026, 9, 26, 17, 0, 0, tzinfo=timezone.utc),
+                    latitude=28.6139,
+                    longitude=77.2090,
+                    accuracy_meters=5.0,
+                    accelerometer_x=0.0,
+                    accelerometer_y=9.81,
+                    accelerometer_z=0.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                ),
+                TelemetryRecord(
+                    version="0.1",
+                    device_id=TEST_DEVICE_ID,
+                    trip_id=trip_id,
+                    timestamp=datetime(2026, 9, 26, 17, 0, 1, tzinfo=timezone.utc),
+                    latitude=28.6140,
+                    longitude=77.2091,
+                    accuracy_meters=5.0,
+                    accelerometer_x=35.0,  # Sudden jerk spike -> unusual_motion
+                    accelerometer_y=35.0,
+                    accelerometer_z=20.0,
+                    battery_level=0.9,
+                    network_status="WIFI",
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/api/v1/telemetry/trips/complete",
+        json={
+            "trip_id": trip_id,
+            "acoustic_distress_score": 0.92,
+        },
+        headers=auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["trip_status"] == TripStatus.COMPLETED_ANOMALOUS.value
+    assert data["inference_status"] == "COMPLETED"
+    assert "acoustic_distress" in data["risk_assessment"]["signals"]
+    assert "unusual_motion" in data["risk_assessment"]["signals"]
+    assert data["risk_assessment"]["risk_level"] == "HIGH"
+    assert data["risk_assessment"]["recommended_action"] == "PRE_ALERT"
+
+    # Verify auto-SOS escalation occurred
+    check_db = TestingSessionLocal()
+    try:
+        sos = check_db.query(SOSAlert).filter(SOSAlert.trip_id == trip_id).first()
+        assert sos is not None
+        assert sos.source == "ai_high_risk"
+        assert sos.status == "received"
+        assert "acoustic_distress" in sos.note
+    finally:
+        check_db.close()

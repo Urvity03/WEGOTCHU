@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Any, Optional
 
 from ai.anomaly_detection.motion import MotionAnomalyResult
 from ai.risk_engine.models import (
@@ -30,11 +30,13 @@ from ai.route_deviation.scoring import RouteDeviationResult
 # "unusual_motion" is therefore the required signal identifier for motion anomalies.
 SIGNAL_ROUTE_DEVIATION: str = "route_deviation"
 SIGNAL_UNUSUAL_MOTION: str = "unusual_motion"
+SIGNAL_ACOUSTIC_DISTRESS: str = "acoustic_distress"
 
 # Provisional anomaly threshold definitions.
 # These denote statistical departure from personal baseline, not confirmed danger.
 ROUTE_ANOMALY_THRESHOLD: float = 0.50
 MOTION_ANOMALY_THRESHOLD: float = 0.50
+AUDIO_DISTRESS_THRESHOLD: float = 0.50
 
 
 class RiskEngine:
@@ -85,14 +87,18 @@ class RiskEngine:
         self,
         route_threshold: float = ROUTE_ANOMALY_THRESHOLD,
         motion_threshold: float = MOTION_ANOMALY_THRESHOLD,
+        audio_threshold: float = AUDIO_DISTRESS_THRESHOLD,
     ) -> None:
         if not (0.0 < route_threshold < 1.0):
             raise ValueError("route_threshold must be strictly within (0.0, 1.0)")
         if not (0.0 < motion_threshold < 1.0):
             raise ValueError("motion_threshold must be strictly within (0.0, 1.0)")
+        if not (0.0 < audio_threshold < 1.0):
+            raise ValueError("audio_threshold must be strictly within (0.0, 1.0)")
 
         self.route_threshold = route_threshold
         self.motion_threshold = motion_threshold
+        self.audio_threshold = audio_threshold
 
     def evaluate(
         self,
@@ -100,15 +106,17 @@ class RiskEngine:
         route_result: Optional[RouteDeviationResult] = None,
         motion_result: Optional[MotionAnomalyResult] = None,
         speed_mps: Optional[float] = None,
+        audio_result: Optional[Any] = None,
     ) -> RiskAssessment:
         """
-        Evaluate route-deviation and motion-anomaly signals.
+        Evaluate route-deviation, motion-anomaly, and acoustic-distress signals.
 
         Args:
             user_id: Identifier of the user under evaluation.
             route_result: RouteDeviationResult from ai/route_deviation/scoring.py (or None).
             motion_result: MotionAnomalyResult from ai/anomaly_detection/motion.py (or None).
             speed_mps: Optional current speed in m/s for telemetry summary.
+            audio_result: Optional acoustic perception result (dict, AudioSignal, or float distress score).
 
         Returns:
             RiskAssessment complying with Contract 4 (Version 0.1).
@@ -127,6 +135,43 @@ class RiskEngine:
             if motion_result and motion_result.status == "SUCCESS"
             else None
         )
+
+        # Extract audio distress score if present
+        audio_score: float | None = None
+        audio_conf: float | None = None
+        if audio_result is not None:
+            if isinstance(audio_result, dict):
+                raw_a_score = audio_result.get("audio_distress_score")
+                raw_a_conf = audio_result.get("confidence")
+            elif hasattr(audio_result, "audio_distress_score"):
+                raw_a_score = getattr(audio_result, "audio_distress_score")
+                raw_a_conf = getattr(audio_result, "confidence", None)
+            elif isinstance(audio_result, (int, float)) and not isinstance(
+                audio_result, bool
+            ):
+                raw_a_score = audio_result
+                raw_a_conf = None
+            else:
+                raw_a_score = None
+                raw_a_conf = None
+
+            if (
+                raw_a_score is not None
+                and isinstance(raw_a_score, (int, float))
+                and not isinstance(raw_a_score, bool)
+                and math.isfinite(raw_a_score)
+                and 0.0 <= float(raw_a_score) <= 1.0
+            ):
+                audio_score = float(raw_a_score)
+
+            if (
+                raw_a_conf is not None
+                and isinstance(raw_a_conf, (int, float))
+                and not isinstance(raw_a_conf, bool)
+                and math.isfinite(raw_a_conf)
+                and 0.0 <= float(raw_a_conf) <= 1.0
+            ):
+                audio_conf = float(raw_a_conf)
 
         # Validate that extracted scores are finite numbers in [0.0, 1.0]
         route_invalid = False
@@ -168,6 +213,7 @@ class RiskEngine:
         active_signals: list[str] = []
         is_route_anomalous = False
         is_motion_anomalous = False
+        is_audio_anomalous = False
 
         if route_score is not None and route_score >= self.route_threshold:
             active_signals.append(SIGNAL_ROUTE_DEVIATION)
@@ -177,11 +223,15 @@ class RiskEngine:
             active_signals.append(SIGNAL_UNUSUAL_MOTION)
             is_motion_anomalous = True
 
+        if audio_score is not None and audio_score >= self.audio_threshold:
+            active_signals.append(SIGNAL_ACOUSTIC_DISTRESS)
+            is_audio_anomalous = True
+
         # Formulate RiskVector
         risk_vector = RiskVector(
             kinematic_anomaly=motion_score,
             route_anomaly=route_score,
-            acoustic_anomaly=None,
+            acoustic_anomaly=audio_score,
             temporal_persistence=None,
         )
 
@@ -202,7 +252,7 @@ class RiskEngine:
             speed_mps=speed_mps,
             corridor_deviation_meters=corridor_dev_meters,
             motion_state=motion_state,
-            acoustic_anomaly_score=None,
+            acoustic_anomaly_score=audio_score,
             motion_status=(
                 motion_result.status if motion_result is not None else "UNAVAILABLE"
             ),
@@ -214,6 +264,7 @@ class RiskEngine:
         # Deterministic Risk & Action Policy Logic
         has_route = route_score is not None
         has_motion = motion_score is not None
+        has_audio = audio_score is not None
 
         # Check for detector failures or corrupted inputs
         route_failure = route_invalid or (
@@ -227,8 +278,8 @@ class RiskEngine:
         )
         has_detector_failure = route_failure or motion_failure
 
-        if not has_route and not has_motion:
-            # Both signals are missing or insufficient (e.g. cold start + no sensors).
+        if not has_route and not has_motion and not has_audio:
+            # All signals are missing or insufficient (e.g. cold start + no sensors).
             # Safety Principle: Never assume unmonitored user is NORMAL (safe).
             # Escalate conservatively to UNUSUAL with MONITOR to reflect telemetry deficit.
             # Do NOT infer safety solely from missing data, nor invent numerical scores.
@@ -238,34 +289,83 @@ class RiskEngine:
             raw_score: float | None = None
             calibrated_score: float | None = None
 
-        elif is_route_anomalous and is_motion_anomalous:
-            # Co-occurring anomalies: simultaneous route deviation and unusual motion.
+        elif is_audio_anomalous and is_motion_anomalous:
+            # Multi-signal distress with acoustic indicator and abnormal motion (e.g. acoustic distress + struggle/fall).
+            # Per docs/architecture/ai-architecture.md Table 2 & §3:
+            # Multi-signal acoustic distress + abnormal motion escalates to HIGH with PRE_ALERT cancellation countdown.
+            risk_level = RiskLevel.HIGH
+            action = RecommendedAction.PRE_ALERT
+
+            active_conf_vals = [0.85]
+            if (
+                motion_result is not None
+                and motion_result.confidence is not None
+                and math.isfinite(motion_result.confidence)
+            ):
+                active_conf_vals.append(
+                    float(max(0.0, min(1.0, motion_result.confidence)))
+                )
+            if audio_conf is not None:
+                active_conf_vals.append(audio_conf)
+
+            confidence = float(
+                min(0.95, max(0.70, sum(active_conf_vals) / len(active_conf_vals)))
+            )
+            anom_scores = []
+            if is_route_anomalous and route_score is not None:
+                anom_scores.append(route_score)
+            if is_motion_anomalous and motion_score is not None:
+                anom_scores.append(motion_score)
+            if is_audio_anomalous and audio_score is not None:
+                anom_scores.append(audio_score)
+            raw_score = (
+                sum(anom_scores) / len(anom_scores) if anom_scores else audio_score
+            )
+            calibrated_score = float(min(1.0, raw_score + 0.20))
+
+        elif (is_route_anomalous and is_motion_anomalous) or (
+            is_route_anomalous and is_audio_anomalous
+        ):
+            # Co-occurring anomalies: simultaneous route deviation and unusual motion/audio (without motion+audio co-occurrence).
             # Escalate to ELEVATED and trigger gentle haptic user check-in.
             # IMPORTANT: Statistical anomaly scores alone NEVER trigger HIGH or EMERGENCY.
             risk_level = RiskLevel.ELEVATED
             action = RecommendedAction.USER_CHECK
-            # Route deviation has no detector-level confidence field; assume a nominal
-            # baseline weight of 0.85 when a validated route anomaly is observed.
-            # Incorporate motion detector confidence explicitly rather than clamping
-            # with an artificial 0.70 floor.
-            if motion_result is None or motion_result.confidence is None:
-                motion_conf = 0.80
-            elif not math.isfinite(motion_result.confidence):
-                motion_conf = 0.0
-            else:
-                motion_conf = float(max(0.0, min(1.0, motion_result.confidence)))
 
-            confidence = float(min(0.95, max(0.0, (0.85 + motion_conf) / 2.0)))
-            raw_score = (route_score + motion_score) / 2.0
+            if is_route_anomalous and is_motion_anomalous:
+                if motion_result is None or motion_result.confidence is None:
+                    motion_conf = 0.80
+                elif not math.isfinite(motion_result.confidence):
+                    motion_conf = 0.0
+                else:
+                    motion_conf = float(max(0.0, min(1.0, motion_result.confidence)))
+
+                confidence = float(min(0.95, max(0.0, (0.85 + motion_conf) / 2.0)))
+                raw_score = (route_score + motion_score) / 2.0
+            else:
+                if audio_conf is None:
+                    a_conf = 0.80
+                elif not math.isfinite(audio_conf):
+                    a_conf = 0.0
+                else:
+                    a_conf = float(max(0.0, min(1.0, audio_conf)))
+
+                confidence = float(min(0.95, max(0.0, (0.85 + a_conf) / 2.0)))
+                raw_score = (route_score + (audio_score or 0.0)) / 2.0
+
             calibrated_score = float(min(1.0, raw_score + 0.15))
 
-        elif is_route_anomalous or is_motion_anomalous:
-            # Single anomaly divergence: unfamiliar street OR unusual motion spike.
+        elif is_route_anomalous or is_motion_anomalous or is_audio_anomalous:
+            # Single anomaly divergence: unfamiliar street OR unusual motion spike OR acoustic anomaly.
             # Escalate to UNUSUAL with MONITOR (increase polling rate / silent logging).
             risk_level = RiskLevel.UNUSUAL
             action = RecommendedAction.MONITOR
-            active_score = route_score if is_route_anomalous else motion_score
-            if is_motion_anomalous and not is_route_anomalous:
+            if is_audio_anomalous:
+                active_score = audio_score
+                confidence = float(
+                    min(0.90, max(0.65, audio_conf if audio_conf is not None else 0.75))
+                )
+            elif is_motion_anomalous and not is_route_anomalous:
                 # When motion is the anomalous modality, scale confidence with motion detector confidence
                 if motion_result is None or motion_result.confidence is None:
                     motion_conf = 0.75
@@ -275,10 +375,13 @@ class RiskEngine:
                     motion_conf = float(max(0.0, min(1.0, motion_result.confidence)))
 
                 confidence = float(min(0.90, max(0.0, motion_conf)))
+                active_score = motion_score
             else:
                 # Route anomaly is active (either motion is normal or motion is unavailable).
                 # Route deviation does not provide a detector-level confidence; assign nominal 0.75.
                 confidence = 0.75
+                active_score = route_score
+
             raw_score = active_score
             calibrated_score = active_score
 
@@ -289,7 +392,9 @@ class RiskEngine:
             risk_level = RiskLevel.UNUSUAL
             action = RecommendedAction.MONITOR
             confidence = 0.35  # Degraded confidence reflecting detector failure
-            available_scores = [s for s in (route_score, motion_score) if s is not None]
+            available_scores = [
+                s for s in (route_score, motion_score, audio_score) if s is not None
+            ]
             raw_score = float(max(available_scores)) if available_scores else None
             calibrated_score = raw_score
 
@@ -297,9 +402,12 @@ class RiskEngine:
             # At least one signal observed, no detector failure, and neither exceeded threshold.
             risk_level = RiskLevel.NORMAL
             action = RecommendedAction.NONE
-            # High confidence when both modalities observed normal; reduced when partial
-            confidence = 0.88 if (has_route and has_motion) else 0.65
-            available_scores = [s for s in (route_score, motion_score) if s is not None]
+            # High confidence when multiple modalities observed normal; reduced when partial
+            observed_count = sum(1 for h in (has_route, has_motion, has_audio) if h)
+            confidence = 0.88 if observed_count >= 2 else 0.65
+            available_scores = [
+                s for s in (route_score, motion_score, audio_score) if s is not None
+            ]
             raw_score = float(max(available_scores)) if available_scores else None
             calibrated_score = raw_score
 
