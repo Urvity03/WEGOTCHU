@@ -143,6 +143,58 @@ def test_uses_only_same_user_history():
 
 
 def test_future_trajectories_are_not_used():
+    def test_overlapping_history_is_not_used():
+        """Overlapping trajectories must not provide historical evidence."""
+
+    base_time = datetime(2026, 1, 1, 10, 0, 0)
+    user_id = "user_overlap"
+
+    overlapping_references = [
+        _make_trajectory(
+            user_id,
+            f"reference_{index}",
+            base_time + timedelta(minutes=index),
+        )
+        for index in range(5)
+    ]
+
+    candidate = _make_trajectory(
+        user_id,
+        "candidate",
+        base_time + timedelta(minutes=5),
+    )
+
+    trajectories = overlapping_references + [candidate]
+
+    manifest = pd.DataFrame(
+        [
+            {
+                "trajectory_id": f"reference_{index}",
+                "user_id": user_id,
+                "split": "reference",
+            }
+            for index in range(5)
+        ]
+        + [
+            {
+                "trajectory_id": "candidate",
+                "user_id": user_id,
+                "split": "validation",
+            }
+        ]
+    )
+
+    results, summary = evaluate_candidates(
+        trajectories,
+        manifest,
+        k_min=5,
+    )
+
+    assert len(results) == 1
+    _, result = results[0]
+    assert result.status == STATUS_INSUFFICIENT_HISTORY
+    assert result.reference_trajectory_count == 0
+    assert summary.insufficient_history_validation == 1
     """Trajectories occurring after the candidate must not appear in reference set."""
     base_time = datetime(2026, 1, 1, 10, 0, 0)
     user_id = "user_003"
