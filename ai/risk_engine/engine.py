@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Any, Optional
 
 from ai.anomaly_detection.motion import MotionAnomalyResult
 from ai.risk_engine.models import (
